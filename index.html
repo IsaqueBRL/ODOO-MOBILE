@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#714B67">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Deuris Mobile">
+<title>Deuris Candy 2 - Mobile</title>
+<style>
+:root {
+    --primary: #714B67; --primary-dark: #5a3b52; --bg: #f4f6f9; --card: #fff; --text: #333;
+    --border: #e0e0e0; --ok: #2e7d32; --danger: #c62828; --warn: #f57c00; --muted: #777;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+html, body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+body { padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
+
+header.bar {
+    position: sticky; top: 0; z-index: 10; background: var(--primary); color: #fff;
+    padding: calc(12px + env(safe-area-inset-top, 0px)) 14px 12px; display: flex; align-items: center; gap: 10px;
+}
+header.bar h1 { font-size: 18px; font-weight: 700; flex: 1; }
+.btn-back { background: rgba(255,255,255,.18); color: #fff; border: none; border-radius: 10px; width: 42px; height: 42px; font-size: 20px; cursor: pointer; display: none; }
+.btn-back.show { display: block; }
+
+main { max-width: 560px; margin: 0 auto; padding: 14px; }
+.screen { display: none; }
+.screen.active { display: block; }
+
+/* Home */
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.tile {
+    background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 22px 10px;
+    text-align: center; font-size: 15px; font-weight: 700; color: var(--primary); cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0,0,0,.05); min-height: 112px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+}
+.tile .ico { font-size: 34px; }
+.tile:active { transform: scale(.97); background: #f6eff4; }
+.tile.wide { grid-column: span 2; background: var(--primary); color: #fff; min-height: 84px; flex-direction: row; gap: 12px; font-size: 17px; }
+.tile.wide:active { background: var(--primary-dark); }
+.hello { text-align: center; color: var(--muted); font-size: 14px; margin: 4px 0 16px; }
+
+/* Controles */
+label.f { display: block; font-size: 12px; font-weight: 700; color: #555; margin: 12px 0 5px; }
+input, select {
+    width: 100%; padding: 13px 12px; border: 1px solid var(--border); border-radius: 12px;
+    font-size: 16px; background: #fff; color: var(--text); outline: none; font-family: inherit;
+}
+input:focus, select:focus { border-color: var(--primary); }
+input[disabled] { background: #f0f0f0; color: #555; }
+.btn { display: block; width: 100%; padding: 15px; border: none; border-radius: 12px; font-size: 16px; font-weight: 700; cursor: pointer; background: var(--primary); color: #fff; margin-top: 14px; }
+.btn:active { background: var(--primary-dark); }
+.btn:disabled { opacity: .6; }
+.btn.sec { background: #fff; color: var(--primary); border: 2px solid var(--primary); }
+.btn.grey { background: #777; }
+.btn.small { width: auto; display: inline-block; padding: 9px 14px; font-size: 14px; margin-top: 0; }
+
+.chips { display: flex; gap: 8px; margin: 12px 0; overflow-x: auto; padding-bottom: 2px; }
+.chip { flex: none; padding: 10px 16px; border-radius: 999px; border: 1px solid var(--border); background: #fff; font-size: 14px; font-weight: 600; cursor: pointer; color: #555; }
+.chip.on { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+.status { text-align: center; color: #666; font-size: 14px; padding: 14px 6px; }
+
+/* Cartões de lista */
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 13px 14px; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.04); }
+.row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.card .t { font-weight: 700; font-size: 15px; }
+.card .s { font-size: 13px; color: var(--muted); margin-top: 3px; }
+.badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.b-ok { background: #e8f5e9; color: var(--ok); }
+.b-warn { background: #fff3e0; color: var(--warn); }
+.b-bad { background: #ffebee; color: var(--danger); }
+.b-info { background: #e3f2fd; color: #1976d2; }
+.money { font-weight: 800; }
+.money.neg { color: var(--danger); }
+.money.pos { color: var(--ok); }
+.total-card { background: #f4eef2; border: 2px solid var(--primary); }
+
+/* Nova venda */
+.picked { display: flex; justify-content: space-between; align-items: center; background: #f4eef2; border-radius: 12px; padding: 12px 14px; font-weight: 700; color: var(--primary); }
+.picked button { background: none; border: none; color: var(--primary); text-decoration: underline; font-size: 14px; cursor: pointer; font-weight: 600; }
+.results { border: 1px solid var(--border); border-radius: 12px; margin-top: 6px; overflow: hidden; background: #fff; }
+.results button { display: block; width: 100%; text-align: left; padding: 13px 14px; border: none; border-bottom: 1px solid var(--border); background: #fff; font-size: 15px; cursor: pointer; }
+.results button:last-child { border-bottom: none; }
+.results button.new { color: var(--primary); font-weight: 700; }
+.line { background: #fff; border: 1px solid var(--border); border-radius: 14px; padding: 12px; margin-top: 10px; }
+.line .name { font-weight: 700; font-size: 14px; margin-bottom: 8px; display: flex; justify-content: space-between; gap: 8px; }
+.line .x { background: none; border: none; color: var(--danger); font-size: 22px; cursor: pointer; line-height: 1; }
+.line .ctrl { display: flex; gap: 10px; align-items: flex-end; }
+.stepper { display: flex; align-items: center; gap: 6px; }
+.stepper button { width: 42px; height: 42px; border-radius: 10px; border: 1px solid var(--border); background: #f6f6f6; font-size: 20px; cursor: pointer; font-weight: 700; }
+.stepper span { min-width: 30px; text-align: center; font-weight: 800; font-size: 17px; }
+.line .price { flex: 1; }
+.line .price input { padding: 10px; }
+.line .sub { text-align: right; font-weight: 800; min-width: 80px; font-size: 14px; }
+.warn-txt { color: var(--danger); font-size: 12px; margin-top: 6px; font-weight: 600; }
+.sum { display: flex; justify-content: space-between; font-size: 20px; font-weight: 800; margin-top: 16px; color: var(--primary); }
+
+/* Toast */
+#toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%) translateY(30px); background: #333; color: #fff; padding: 13px 18px; border-radius: 12px; font-size: 15px; max-width: 90%; text-align: center; opacity: 0; pointer-events: none; transition: .25s; z-index: 50; }
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+#toast.err { background: var(--danger); }
+#toast.ok { background: var(--ok); }
+</style>
+</head>
+<body>
+
+<header class="bar">
+    <button class="btn-back" id="btnBack" onclick="voltar()" aria-label="Voltar">←</button>
+    <h1 id="titulo">Deuris Candy 2</h1>
+</header>
+
+<main>
+
+<!-- HOME -->
+<section class="screen active" id="home">
+    <p class="hello">Ferramentas rápidas</p>
+    <div class="grid">
+        <div class="tile wide" onclick="abrirNovaVenda()"><span class="ico">🛒</span> Nova venda</div>
+        <div class="tile" onclick="abrirEstoque()"><span class="ico">📦</span>Estoque</div>
+        <div class="tile" onclick="abrirVendas()"><span class="ico">🧾</span>Vendas</div>
+        <div class="tile" onclick="abrirSaldos()"><span class="ico">💰</span>Saldos</div>
+        <div class="tile" onclick="abrirTransfContas()"><span class="ico">🔁</span>Transferir entre contas</div>
+    </div>
+</section>
+
+<!-- ESTOQUE -->
+<section class="screen" id="estoque">
+    <input type="text" id="estBusca" placeholder="Nome do produto..." oninput="debounce('est', buscarEstoque)">
+    <label class="f">Local</label>
+    <select id="estLocal" onchange="buscarEstoque()">
+        <option value="">Selecione um local...</option>
+        <option value="all">Todos os locais</option>
+    </select>
+    <div id="estStatus" class="status"></div>
+    <div id="estLista"></div>
+</section>
+
+<!-- VENDAS -->
+<section class="screen" id="vendas">
+    <button class="btn" style="margin-top:0" onclick="abrirNovaVenda()">+ Nova venda</button>
+    <input type="text" id="venBusca" style="margin-top:12px" placeholder="Número do pedido ou cliente..." oninput="debounce('ven', () => carregarVendas(true))">
+    <div class="chips">
+        <button class="chip" data-st="all" onclick="escolherStatus('all')">Últimas</button>
+        <button class="chip" data-st="draft" onclick="escolherStatus('draft')">Orçamentos</button>
+        <button class="chip" data-st="sale" onclick="escolherStatus('sale')">Confirmadas</button>
+        <button class="chip" data-st="cancel" onclick="escolherStatus('cancel')">Canceladas</button>
+    </div>
+    <div id="venStatus" class="status"></div>
+    <div id="venLista"></div>
+</section>
+
+<!-- NOVA VENDA -->
+<section class="screen" id="novaVenda">
+    <label class="f" style="margin-top:0">Cliente *</label>
+    <div id="nvClienteBox"></div>
+
+    <label class="f">Local de estoque (armazém) *</label>
+    <select id="nvArmazem" onchange="trocarArmazem()"><option value="">Selecione...</option></select>
+
+    <label class="f">Adicionar produto</label>
+    <select id="nvProduto" onchange="adicionarProduto(this.value); this.value='';" disabled>
+        <option value="">Escolha o armazém primeiro</option>
+    </select>
+
+    <div id="nvLinhas"></div>
+
+    <div class="sum"><span>Total</span><span id="nvTotal">R$ 0,00</span></div>
+
+    <button class="btn" id="btnConfirmarVenda" onclick="salvarVenda(true)">Confirmar e Lançar Venda</button>
+    <button class="btn sec" id="btnOrcamento" onclick="salvarVenda(false)">Salvar Orçamento</button>
+</section>
+
+<!-- SALDOS -->
+<section class="screen" id="saldos">
+    <div id="salStatus" class="status">Carregando...</div>
+    <div id="salLista"></div>
+</section>
+
+<!-- TRANSFERÊNCIA ENTRE CONTAS -->
+<section class="screen" id="transfContas">
+    <label class="f" style="margin-top:0">Diário</label>
+    <input type="text" id="tcDiario" disabled>
+    <label class="f">Data contábil</label>
+    <input type="text" id="tcData" disabled>
+    <label class="f">Conta de origem (de onde sai o valor)</label>
+    <select id="tcDe"></select>
+    <label class="f">Conta de destino (para onde entra o valor)</label>
+    <select id="tcPara"></select>
+    <label class="f">Valor (R$)</label>
+    <input type="number" id="tcValor" inputmode="decimal" step="0.01" min="0.01" placeholder="0,00">
+    <button class="btn" id="btnLancarTc" onclick="lancarTransfContas()">Lançar</button>
+    <button class="btn grey" onclick="voltar()">Cancelar</button>
+</section>
+
+</main>
+
+<div id="toast"></div>
+
+<script>
+/* ============ Utilidades ============ */
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const brl = n => 'R$ ' + (Number(n) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function dataHora(v) {
+    if (!v) return '-';
+    const d = new Date(String(v).replace(' ', 'T') + 'Z');
+    return isNaN(d) ? '-' : d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+let toastTimer;
+function toast(msg, tipo) {
+    const t = $('toast');
+    t.textContent = msg;
+    t.className = 'show ' + (tipo || '');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.className = ''; }, tipo === 'err' ? 5000 : 3000);
+}
+
+async function api(action, dados = {}) {
+    try {
+        const r = await fetch('/api/odoo', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action, ...dados })
+        });
+        const j = await r.json().catch(() => ({ error: 'Resposta inválida do servidor.' }));
+        if (!r.ok && !j.error) j.error = 'Erro ' + r.status;
+        return j;
+    } catch (e) {
+        return { error: 'Sem conexão com o servidor.' };
+    }
+}
+
+const timers = {};
+function debounce(k, fn, ms = 450) { clearTimeout(timers[k]); timers[k] = setTimeout(fn, ms); }
+
+/* ============ Navegação ============ */
+const TITULOS = { home: 'Deuris Candy 2', estoque: 'Estoque', vendas: 'Vendas', novaVenda: 'Nova venda', saldos: 'Saldos', transfContas: 'Transferir entre contas' };
+let pilha = ['home'];
+
+function ir(tela) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    $(tela).classList.add('active');
+    $('titulo').textContent = TITULOS[tela];
+    $('btnBack').classList.toggle('show', tela !== 'home');
+    window.scrollTo(0, 0);
+}
+function abrir(tela) { pilha.push(tela); ir(tela); }
+function voltar() {
+    if (pilha.length > 1) pilha.pop();
+    ir(pilha[pilha.length - 1]);
+}
+
+/* ============ Estoque (só carrega depois de escolher um filtro) ============ */
+let estReq = 0, locaisCarregados = false;
+
+async function abrirEstoque() {
+    $('estBusca').value = ''; $('estLocal').value = '';
+    $('estLista').innerHTML = '';
+    $('estStatus').textContent = 'Escolha um local ou digite o nome do produto.';
+    abrir('estoque');
+    if (!locaisCarregados) {
+        const d = await api('get_locations');
+        if (d.result) {
+            $('estLocal').innerHTML = '<option value="">Selecione um local...</option><option value="all">Todos os locais</option>' +
+                d.result.map(l => `<option value="${l.id}">${esc(l.complete_name)}</option>`).join('');
+            locaisCarregados = true;
+        }
+    }
+}
+
+async function buscarEstoque() {
+    const query = $('estBusca').value.trim();
+    const loc = $('estLocal').value;
+    const req = ++estReq;
+    if (!query && !loc) {
+        $('estLista').innerHTML = '';
+        $('estStatus').textContent = 'Escolha um local ou digite o nome do produto.';
+        return;
+    }
+    $('estStatus').textContent = 'Pesquisando...';
+    const d = await api('get_stock', { query, location_id: loc === 'all' ? null : loc });
+    if (req !== estReq) return;
+    if (!d.result) { $('estStatus').textContent = d.error || 'Erro ao carregar estoque.'; return; }
+    if (d.result.length === 0) { $('estLista').innerHTML = ''; $('estStatus').textContent = 'Nenhum item em estoque encontrado.'; return; }
+    $('estStatus').textContent = d.result.length + ' item(ns) encontrado(s)';
+    $('estLista').innerHTML = d.result.map(i => `
+        <div class="card row">
+            <div><div class="t">${esc(Array.isArray(i.product_id) ? i.product_id[1] : '-')}</div>
+            <div class="s">${esc(Array.isArray(i.location_id) ? i.location_id[1] : '-')}</div></div>
+            <span class="badge b-ok">${i.quantity ?? 0} un</span>
+        </div>`).join('');
+}
+
+/* ============ Vendas (só carrega depois de escolher um filtro) ============ */
+let venStatus = null, venReq = 0;
+
+function abrirVendas() {
+    venStatus = null;
+    $('venBusca').value = '';
+    document.querySelectorAll('#vendas .chip').forEach(c => c.classList.remove('on'));
+    $('venLista').innerHTML = '';
+    $('venStatus').textContent = 'Escolha "Últimas", um status ou digite para pesquisar.';
+    abrir('vendas');
+}
+
+function escolherStatus(st) {
+    venStatus = st;
+    document.querySelectorAll('#vendas .chip').forEach(c => c.classList.toggle('on', c.dataset.st === st));
+    carregarVendas();
+}
+
+async function carregarVendas() {
+    const query = $('venBusca').value.trim();
+    const req = ++venReq;
+    if (!query && !venStatus) {
+        $('venLista').innerHTML = '';
+        $('venStatus').textContent = 'Escolha "Últimas", um status ou digite para pesquisar.';
+        return;
+    }
+    $('venStatus').textContent = 'Carregando...';
+    const d = await api('get_sales', { query, order_status: (venStatus && venStatus !== 'all') ? venStatus : '' });
+    if (req !== venReq) return;
+    if (!d.result) { $('venStatus').textContent = d.error || 'Erro ao carregar vendas.'; return; }
+    if (d.result.length === 0) { $('venLista').innerHTML = ''; $('venStatus').textContent = 'Nenhuma venda encontrada.'; return; }
+    $('venStatus').textContent = d.result.length + ' venda(s)';
+
+    const stBadge = s => s === 'cancel' ? '<span class="badge b-bad">Cancelada</span>'
+        : (s === 'sale' || s === 'done') ? '<span class="badge b-ok">Confirmada</span>'
+        : '<span class="badge b-warn">Orçamento</span>';
+    const pgBadge = p => p === 'pago' ? '<span class="badge b-ok">Pago</span>'
+        : p === 'nao_pago' ? '<span class="badge b-warn">Não pago</span>'
+        : '<span class="badge b-info">Sem fatura</span>';
+
+    $('venLista').innerHTML = d.result.map(o => `
+        <div class="card">
+            <div class="row"><div class="t">${esc(o.name)}</div><div class="money">${brl(o.amount_total)}</div></div>
+            <div class="s">${esc(Array.isArray(o.partner_id) ? o.partner_id[1] : '-')} · ${esc(Array.isArray(o.warehouse_id) ? o.warehouse_id[1] : '-')}</div>
+            <div class="s">${dataHora(o.date_order)}</div>
+            <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap">${stBadge(o.state)} ${o.state !== 'cancel' ? pgBadge(o.payment_summary) : ''}</div>
+        </div>`).join('');
+}
+
+/* ============ Nova venda ============ */
+let venda = null;      // { partner, warehouse, produtos[], linhas[] }
+let nvBuscaReq = 0;
+
+async function abrirNovaVenda() {
+    venda = { partner: null, warehouse: '', produtos: [], linhas: [] };
+    renderCliente();
+    renderLinhas();
+    $('nvProduto').innerHTML = '<option value="">Escolha o armazém primeiro</option>';
+    $('nvProduto').disabled = true;
+    $('nvArmazem').innerHTML = '<option value="">Carregando...</option>';
+    // evita empilhar a tela duas vezes se já estiver nela (ex.: botão dentro de Vendas)
+    if (pilha[pilha.length - 1] !== 'novaVenda') abrir('novaVenda');
+
+    const d = await api('get_warehouses');
+    const lista = d.result || [];
+    $('nvArmazem').innerHTML = '<option value="">Selecione...</option>' + lista.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('');
+    if (lista.length === 1) { $('nvArmazem').value = lista[0].id; trocarArmazem(); }
+}
+
+function renderCliente() {
+    const box = $('nvClienteBox');
+    if (venda.partner) {
+        box.innerHTML = `<div class="picked"><span>${esc(venda.partner.name)}</span><button onclick="trocarCliente()">trocar</button></div>`;
+    } else {
+        box.innerHTML = `<input type="text" id="nvCliBusca" placeholder="Buscar ou criar cliente..." oninput="debounce('cli', buscarCliente, 350)" autocomplete="off">
+                         <div id="nvCliRes"></div>`;
+    }
+}
+function trocarCliente() { venda.partner = null; renderCliente(); }
+
+async function buscarCliente() {
+    const q = ($('nvCliBusca').value || '').trim();
+    const box = $('nvCliRes');
+    const req = ++nvBuscaReq;
+    if (!q) { box.innerHTML = ''; return; }
+    const d = await api('search_partners', { query: q });
+    if (req !== nvBuscaReq || !$('nvCliRes')) return;
+    const itens = (d.partners || []).map(p => `<button onclick="escolherCliente(${p.id}, decodeURIComponent('${encodeURIComponent(p.name)}'))">${esc(p.name)}</button>`).join('');
+    box.innerHTML = `<div class="results">${itens}<button class="new" onclick="criarCliente()">+ Criar cliente "${esc(q)}"</button></div>`;
+}
+function escolherCliente(id, name) { venda.partner = { id, name }; renderCliente(); }
+
+async function criarCliente() {
+    const nome = ($('nvCliBusca').value || '').trim();
+    if (!nome) return;
+    const d = await api('create_partner', { name: nome });
+    if (d.success) { escolherCliente(d.id, d.name); toast('Cliente criado.', 'ok'); }
+    else toast(d.error || 'Não foi possível criar o cliente.', 'err');
+}
+
+async function trocarArmazem() {
+    const wh = $('nvArmazem').value;
+    venda.warehouse = wh;
+    const sel = $('nvProduto');
+    if (!wh) { sel.innerHTML = '<option value="">Escolha o armazém primeiro</option>'; sel.disabled = true; venda.produtos = []; return; }
+    sel.disabled = true;
+    sel.innerHTML = '<option value="">Carregando produtos...</option>';
+    const d = await api('get_warehouse_products', { warehouse_id: Number(wh) });
+    if (!d.products) { sel.innerHTML = '<option value="">Erro ao carregar</option>'; toast(d.error || 'Erro ao carregar produtos.', 'err'); return; }
+    venda.produtos = d.products;
+    sel.innerHTML = '<option value="">' + (d.products.length ? 'Escolha um produto...' : 'Sem estoque neste armazém') + '</option>' +
+        d.products.map(p => `<option value="${p.id}">${esc(p.display_name)} (${p.stock_qty} un) - ${brl(p.list_price)}</option>`).join('');
+    sel.disabled = d.products.length === 0;
+
+    // remove das linhas os produtos que não existem neste armazém
+    const antes = venda.linhas.length;
+    venda.linhas = venda.linhas.filter(l => d.products.some(p => p.id === l.id));
+    if (venda.linhas.length < antes) toast('Itens sem estoque neste armazém foram removidos.', 'err');
+    renderLinhas();
+}
+
+function adicionarProduto(id) {
+    if (!id) return;
+    id = Number(id);
+    const ja = venda.linhas.find(l => l.id === id);
+    if (ja) { ja.qty += 1; renderLinhas(); return; }
+    const p = venda.produtos.find(x => x.id === id);
+    if (!p) return;
+    venda.linhas.push({ id: p.id, nome: p.display_name, qty: 1, price: p.list_price || 0, estoque: p.stock_qty });
+    renderLinhas();
+}
+
+function mudarQtd(id, delta) {
+    const l = venda.linhas.find(x => x.id === id);
+    if (!l) return;
+    l.qty += delta;
+    if (l.qty < 1) venda.linhas = venda.linhas.filter(x => x.id !== id);
+    renderLinhas();
+}
+function mudarPreco(id, v) {
+    const l = venda.linhas.find(x => x.id === id);
+    if (l) { l.price = parseFloat(String(v).replace(',', '.')) || 0; atualizarTotal(); const s = document.getElementById('sub' + id); if (s) s.textContent = brl(l.qty * l.price); }
+}
+function removerLinha(id) { venda.linhas = venda.linhas.filter(x => x.id !== id); renderLinhas(); }
+
+function atualizarTotal() {
+    $('nvTotal').textContent = brl(venda.linhas.reduce((s, l) => s + l.qty * l.price, 0));
+}
+
+function renderLinhas() {
+    $('nvLinhas').innerHTML = venda.linhas.map(l => `
+        <div class="line">
+            <div class="name"><span>${esc(l.nome)}</span><button class="x" onclick="removerLinha(${l.id})" aria-label="Remover">×</button></div>
+            <div class="ctrl">
+                <div class="stepper">
+                    <button onclick="mudarQtd(${l.id}, -1)">−</button><span>${l.qty}</span><button onclick="mudarQtd(${l.id}, 1)">+</button>
+                </div>
+                <div class="price"><input type="number" inputmode="decimal" step="0.01" value="${l.price}" onchange="mudarPreco(${l.id}, this.value)" oninput="mudarPreco(${l.id}, this.value)"></div>
+                <div class="sub" id="sub${l.id}">${brl(l.qty * l.price)}</div>
+            </div>
+            ${l.qty > l.estoque ? `<div class="warn-txt">Atenção: só há ${l.estoque} un em estoque.</div>` : ''}
+        </div>`).join('');
+    atualizarTotal();
+}
+
+async function salvarVenda(confirmar) {
+    if (!venda.partner) return toast('Selecione um cliente.', 'err');
+    if (!venda.warehouse) return toast('Selecione o armazém.', 'err');
+    if (venda.linhas.length === 0) return toast('Adicione ao menos um produto.', 'err');
+
+    const btnA = $('btnConfirmarVenda'), btnB = $('btnOrcamento');
+    const txtA = btnA.textContent, txtB = btnB.textContent;
+    btnA.disabled = btnB.disabled = true;
+    (confirmar ? btnA : btnB).textContent = 'Processando...';
+
+    const d = await api('save_sale_order', {
+        partner_id: venda.partner.id,
+        warehouse_id: Number(venda.warehouse),
+        lines: venda.linhas.map(l => ({ product_id: l.id, qty: l.qty, price: l.price })),
+        confirm: confirmar
+    });
+
+    btnA.disabled = btnB.disabled = false;
+    btnA.textContent = txtA; btnB.textContent = txtB;
+
+    if (d.success) {
+        const avisos = (d.warnings || []).join(' ');
+        toast(confirmar ? ('Venda lançada!' + (avisos ? ' ' + avisos : '')) : 'Orçamento salvo!', avisos ? 'err' : 'ok');
+        // volta para a lista de vendas mostrando as últimas
+        pilha = ['home', 'vendas'];
+        ir('vendas');
+        $('venBusca').value = '';
+        escolherStatus('all');
+    } else {
+        toast(d.error || 'Erro ao salvar a venda.', 'err');
+    }
+}
+
+/* ============ Saldos ============ */
+async function abrirSaldos() {
+    $('salStatus').textContent = 'Carregando...';
+    $('salLista').innerHTML = '';
+    abrir('saldos');
+    const d = await api('get_financial_accounts', { query: '' });
+    if (!d.result) { $('salStatus').textContent = d.error || 'Erro ao carregar saldos.'; return; }
+    if (d.result.length === 0) { $('salStatus').textContent = 'Nenhuma conta com saldo.'; return; }
+    $('salStatus').textContent = d.result.length + ' conta(s)';
+    const cls = n => (n < 0 ? 'neg' : 'pos');
+    const total = d.result.reduce((s, a) => s + Math.round((a.balance || 0) * 100), 0) / 100;
+    $('salLista').innerHTML = d.result.map(a => `
+        <div class="card row">
+            <div><div class="t">${esc(a.name)}</div><div class="s">${esc(a.code)}</div></div>
+            <div class="money ${cls(a.balance || 0)}">${brl(a.balance || 0)}</div>
+        </div>`).join('') +
+        `<div class="card total-card row"><div class="t">TOTAL</div><div class="money ${cls(total)}">${brl(total)}</div></div>`;
+}
+
+/* ============ Transferência entre contas ============ */
+let tcDataIso = '';
+
+async function abrirTransfContas() {
+    const h = new Date(), p = n => String(n).padStart(2, '0');
+    tcDataIso = `${h.getFullYear()}-${p(h.getMonth() + 1)}-${p(h.getDate())}`;
+    $('tcData').value = `${p(h.getDate())}/${p(h.getMonth() + 1)}/${h.getFullYear()}`;
+    $('tcDiario').value = 'Transferências';
+    $('tcValor').value = '';
+    $('tcDe').innerHTML = $('tcPara').innerHTML = '<option value="">Carregando...</option>';
+    abrir('transfContas');
+
+    const d = await api('get_account_transfer_setup');
+    if (!d.accounts) { toast(d.error || 'Não foi possível carregar as contas.', 'err'); return; }
+    if (!d.journal) { toast('Diário "Transferências" não encontrado no Odoo.', 'err'); return; }
+    $('tcDiario').value = d.journal.name;
+    const ops = d.accounts.map(a => `<option value="${a.id}">${esc((a.code ? a.code + ' ' : '') + a.name)}</option>`).join('');
+    $('tcDe').innerHTML = '<option value="">Selecione a conta de origem...</option>' + ops;
+    $('tcPara').innerHTML = '<option value="">Selecione a conta de destino...</option>' + ops;
+}
+
+async function lancarTransfContas() {
+    const de = $('tcDe').value, para = $('tcPara').value, valor = parseFloat($('tcValor').value);
+    if (!de || !para) return toast('Selecione a conta de origem e a de destino.', 'err');
+    if (de === para) return toast('A origem e o destino devem ser diferentes.', 'err');
+    if (!(valor > 0)) return toast('Informe um valor maior que zero.', 'err');
+
+    const btn = $('btnLancarTc');
+    btn.disabled = true; btn.textContent = 'Lançando...';
+    const d = await api('create_account_transfer', { from_account_id: de, to_account_id: para, amount: valor, date: tcDataIso });
+    btn.disabled = false; btn.textContent = 'Lançar';
+
+    if (d.success) {
+        toast(('Transferência ' + (d.name || '') + ' lançada!').replace('  ', ' '), 'ok');
+        pilha = ['home'];
+        ir('home');
+    } else {
+        toast(d.error || 'Erro ao lançar a transferência.', 'err');
+    }
+}
+</script>
+</body>
+</html>
