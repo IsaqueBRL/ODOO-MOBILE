@@ -227,7 +227,7 @@ async function api(action, dados = {}) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action, ...dados })
         });
-        const j = await r.json().catch(() => ({ error: 'Resposta inválida do servidor.' }));
+        const j = await r.json().catch(() => ({ error: 'A API não respondeu corretamente (erro ' + r.status + '). Confira se o arquivo está em api/odoo.js no GitHub.' }));
         if (!r.ok && !j.error) j.error = 'Erro ' + r.status;
         return j;
     } catch (e) {
@@ -269,6 +269,8 @@ async function abrirEstoque() {
             $('estLocal').innerHTML = '<option value="">Selecione um local...</option><option value="all">Todos os locais</option>' +
                 d.result.map(l => `<option value="${l.id}">${esc(l.complete_name)}</option>`).join('');
             locaisCarregados = true;
+        } else {
+            toast(d.error || 'Não foi possível carregar os locais.', 'err');
         }
     }
 }
@@ -360,6 +362,7 @@ async function abrirNovaVenda() {
     if (pilha[pilha.length - 1] !== 'novaVenda') abrir('novaVenda');
 
     const d = await api('get_warehouses');
+    if (!d.result) toast(d.error || 'Não foi possível carregar os armazéns.', 'err');
     const lista = d.result || [];
     $('nvArmazem').innerHTML = '<option value="">Selecione...</option>' + lista.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('');
     if (lista.length === 1) { $('nvArmazem').value = lista[0].id; trocarArmazem(); }
