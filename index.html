@@ -139,7 +139,7 @@ input[disabled] { background: #f0f0f0; color: #555; }
 /* Data compacta e desconto por item */
 .in-data { width: auto; max-width: 225px; padding: 8px 10px; font-size: 14px; border-radius: 10px; }
 .line .sub { text-align: right; font-weight: 800; font-size: 15px; margin-left: auto; line-height: 1.15; }
-.line .sub small { display: block; font-weight: 600; font-size: 12px; color: #888; text-decoration: line-through; }
+.line .sub small { display: inline; margin-right: 6px; font-weight: 600; font-size: 12px; color: #888; text-decoration: line-through; }
 .line .desc { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .line .desc label { font-size: 12px; font-weight: 700; color: #555; }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; flex: none; }
@@ -147,6 +147,24 @@ input[disabled] { background: #f0f0f0; color: #555; }
 .seg button.on { background: var(--primary); color: #fff; }
 .line .desc input { flex: 1; min-width: 0; padding: 9px 10px; font-size: 15px; }
 .line .desc .eq { font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+
+/* Item da venda (layout: nome / Qtd + Desconto / subtotal + remover) */
+.line { background: #f8f9fb; padding: 14px; }
+.line .pname { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 14px; font-weight: 700; font-size: 15px; margin-bottom: 12px; }
+.line .cols { display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: end; }
+.line .col label { display: block; font-size: 12px; font-weight: 700; color: #555; margin-bottom: 5px; }
+.line .stepper { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 4px; gap: 4px; }
+.line .stepper button { width: 40px; height: 40px; border: none; border-radius: 9px; background: #f1f1f4; }
+.line .stepper span { min-width: 34px; font-size: 18px; }
+.line .dsc { display: flex; gap: 8px; }
+.line .dsc input { flex: 1; min-width: 0; text-align: center; padding: 12px 8px; font-size: 16px; border-radius: 12px; }
+.line .dsc select { width: auto; flex: none; padding: 12px 8px; font-size: 15px; font-weight: 700; border-radius: 12px; }
+.line .foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 12px; }
+.line .foot .sub { margin-left: 0; font-size: 17px; }
+.line .foot .eq { font-size: 12px; color: var(--muted); margin-right: auto; }
+.line .rm { width: 42px; height: 42px; border-radius: 50%; border: none; background: #fde2e4; color: var(--danger); font-size: 22px; cursor: pointer; line-height: 1; flex: none; }
+.line .rm:active { background: #f9c6ca; }
 
 /* Pop-up de pagamento */
 .modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 45; align-items: center; justify-content: center; padding: 16px; }
@@ -595,7 +613,7 @@ function adicionarProduto(id) {
     if (ja) { ja.qty += 1; renderLinhas(); return; }
     const p = venda.produtos.find(x => x.id === id);
     if (!p) return;
-    venda.linhas.push({ id: p.id, nome: p.display_name, qty: 1, price: p.list_price || 0, estoque: p.stock_qty, discTipo: '%', discVal: 0 });
+    venda.linhas.push({ id: p.id, nome: p.display_name, qty: 1, price: p.list_price || 0, estoque: p.stock_qty, discTipo: 'R$', discVal: 0 });
     renderLinhas();
 }
 
@@ -647,21 +665,29 @@ function atualizarTotal() {
 function renderLinhas() {
     $('nvLinhas').innerHTML = venda.linhas.map(l => `
         <div class="line">
-            <div class="name"><span>${esc(l.nome)}</span><button class="x" onclick="removerLinha(${l.id})" aria-label="Remover">×</button></div>
-            <div class="ctrl">
-                <div class="stepper">
-                    <button onclick="mudarQtd(${l.id}, -1)">−</button><span>${l.qty}</span><button onclick="mudarQtd(${l.id}, 1)">+</button>
+            <div class="pname">${esc(l.nome)}</div>
+            <div class="cols">
+                <div class="col">
+                    <label>Qtd.</label>
+                    <div class="stepper">
+                        <button onclick="mudarQtd(${l.id}, -1)">−</button><span>${l.qty}</span><button onclick="mudarQtd(${l.id}, 1)">+</button>
+                    </div>
                 </div>
-                <div class="sub" id="sub${l.id}"></div>
+                <div class="col">
+                    <label>Desconto</label>
+                    <div class="dsc">
+                        <input type="number" inputmode="decimal" step="0.01" min="0" placeholder="0" value="${l.discVal || ''}" oninput="mudarDesc(${l.id}, this.value)">
+                        <select onchange="mudarTipoDesc(${l.id}, this.value)">
+                            <option value="R$"${l.discTipo === 'R$' ? ' selected' : ''}>R$</option>
+                            <option value="%"${l.discTipo === '%' ? ' selected' : ''}>%</option>
+                        </select>
+                    </div>
+                </div>
             </div>
-            <div class="desc">
-                <label>Desconto</label>
-                <div class="seg">
-                    <button class="${l.discTipo === '%' ? 'on' : ''}" onclick="mudarTipoDesc(${l.id}, '%')">%</button>
-                    <button class="${l.discTipo === 'R$' ? 'on' : ''}" onclick="mudarTipoDesc(${l.id}, 'R$')">R$</button>
-                </div>
-                <input type="number" inputmode="decimal" step="0.01" min="0" placeholder="0" value="${l.discVal || ''}" oninput="mudarDesc(${l.id}, this.value)">
+            <div class="foot">
                 <span class="eq" id="eq${l.id}"></span>
+                <div class="sub" id="sub${l.id}"></div>
+                <button class="rm" onclick="removerLinha(${l.id})" aria-label="Remover">×</button>
             </div>
             ${l.qty > l.estoque ? `<div class="warn-txt">Atenção: só há ${l.estoque} un em estoque.</div>` : ''}
         </div>`).join('');
