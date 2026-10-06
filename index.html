@@ -189,6 +189,8 @@ input[disabled] { background: #f0f0f0; color: #555; }
 .tab-row.click { cursor: pointer; }
 .tab-row.click:active { background: #f4eef2; }
 
+.btn-add.btn-sm { display: inline-block; width: auto; margin: 0 0 8px; padding: 8px 16px; font-size: 14px; border-radius: 10px; }
+
 /* Pop-up de pagamento */
 .modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 45; align-items: center; justify-content: center; padding: 16px; }
 .modal-bg.show { display: flex; }
@@ -235,7 +237,7 @@ input[disabled] { background: #f0f0f0; color: #555; }
 <!-- ESTOQUE -->
 <section class="screen" id="estoque">
     <input type="text" id="estBusca" placeholder="Nome do produto..." oninput="debounce('est', buscarEstoque)">
-    <button type="button" class="btn-add" style="margin:0 0 12px" onclick="abrirAdicionarEstoque()">＋ Adicionar item que não está na lista</button>
+    <button type="button" class="btn-add btn-sm" onclick="abrirAdicionarEstoque()">Itens zerados</button>
     <div id="estStatus" class="status"></div>
     <div class="tabela" id="estTabela" style="display:none">
         <div class="tab-head"><span>Descrição</span><button type="button" id="estOrdem" onclick="alternarOrdemEstoque()">Quantidade <i>⇅</i></button></div>
@@ -328,7 +330,7 @@ input[disabled] { background: #f0f0f0; color: #555; }
 <!-- Adicionar item ao estoque -->
 <div class="modal-bg" id="addBg">
     <div class="modal" style="padding:18px 0 0">
-        <h2 style="padding:0 20px">Adicionar ao estoque</h2>
+        <h2 style="padding:0 20px">Itens zerados</h2>
         <div style="padding:8px 16px 10px"><input type="text" id="addBusca" placeholder="Nome do produto..." oninput="debounce('add', buscarAdicionaveis)" autocomplete="off"></div>
         <div id="addStatus" class="status" style="padding:0 16px 6px"></div>
         <div class="prod-body" id="addLista" style="max-height:50vh"></div>
@@ -456,9 +458,9 @@ function ir(tela) {
     $(tela).classList.add('active');
     const home = tela === 'home';
     $('titulo').textContent = TITULOS[tela];
-    $('titulo').style.display = home ? 'none' : 'block';
-    $('btnLocal').style.display = home ? 'flex' : 'none';
-    $('chipLocal').style.display = home ? 'none' : 'inline-block';
+    $('titulo').style.display = 'block';
+    $('btnLocal').style.display = 'none';
+    $('chipLocal').style.display = 'inline-block';
     $('btnBack').classList.toggle('show', !home);
     $('fab').classList.toggle('show', ['home', 'vendas'].includes(tela));
     window.scrollTo(0, 0);
@@ -599,7 +601,7 @@ async function buscarAdicionaveis() {
     if (req !== addReq) return;
     if (!d.products) { $('addStatus').textContent = d.error || 'Erro ao carregar produtos.'; return; }
     addDados = d.products;
-    $('addStatus').textContent = d.products.length ? d.products.length + ' item(ns) fora do estoque' : 'Nenhum item encontrado.';
+    $('addStatus').textContent = d.products.length ? d.products.length + ' item(ns) zerado(s)' : 'Nenhum item encontrado.';
     $('addLista').innerHTML = d.products.map(p => `<button type="button" class="prod-item" style="grid-template-columns:1fr" onclick="escolherAdicionar(${p.id})"><span>${esc(p.display_name)}</span></button>`).join('');
 }
 function escolherAdicionar(id) {
