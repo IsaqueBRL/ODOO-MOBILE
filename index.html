@@ -135,6 +135,19 @@ input[disabled] { background: #f0f0f0; color: #555; }
 .fab:active { transform: scale(.94); background: var(--primary-dark); }
 
 
+
+/* Data compacta e desconto por item */
+.in-data { width: auto; max-width: 225px; padding: 8px 10px; font-size: 14px; border-radius: 10px; }
+.line .sub { text-align: right; font-weight: 800; font-size: 15px; margin-left: auto; line-height: 1.15; }
+.line .sub small { display: block; font-weight: 600; font-size: 12px; color: #888; text-decoration: line-through; }
+.line .desc { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.line .desc label { font-size: 12px; font-weight: 700; color: #555; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; flex: none; }
+.seg button { border: none; background: #f6f6f6; padding: 9px 13px; font-size: 14px; font-weight: 700; color: #555; cursor: pointer; }
+.seg button.on { background: var(--primary); color: #fff; }
+.line .desc input { flex: 1; min-width: 0; padding: 9px 10px; font-size: 15px; }
+.line .desc .eq { font-size: 12px; color: var(--muted); white-space: nowrap; }
+
 /* Pop-up de pagamento */
 .modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 45; align-items: center; justify-content: center; padding: 16px; }
 .modal-bg.show { display: flex; }
@@ -204,7 +217,7 @@ input[disabled] { background: #f0f0f0; color: #555; }
     <div id="nvClienteBox"></div>
 
     <label class="f" for="nvData">Data da venda</label>
-    <input type="datetime-local" id="nvData" onchange="venda.data = this.value">
+    <input type="datetime-local" id="nvData" class="in-data" onchange="venda.data = this.value">
 
     <label class="f">Adicionar produto</label>
     <button type="button" class="pick-btn" id="nvProdBtn" onclick="abrirListaProdutos()" disabled>Carregando produtos...</button>
@@ -582,7 +595,7 @@ function adicionarProduto(id) {
     if (ja) { ja.qty += 1; renderLinhas(); return; }
     const p = venda.produtos.find(x => x.id === id);
     if (!p) return;
-    venda.linhas.push({ id: p.id, nome: p.display_name, qty: 1, price: p.list_price || 0, estoque: p.stock_qty });
+    venda.linhas.push({ id: p.id, nome: p.display_name, qty: 1, price: p.list_price || 0, estoque: p.stock_qty, discTipo: '%', discVal: 0 });
     renderLinhas();
 }
 
@@ -593,14 +606,42 @@ function mudarQtd(id, delta) {
     if (l.qty < 1) venda.linhas = venda.linhas.filter(x => x.id !== id);
     renderLinhas();
 }
-function mudarPreco(id, v) {
+/* Desconto: o Odoo só aceita % por linha; se o usuário digitar em R$, converte para % */
+const bruto = l => l.qty * l.price;
+function pctDesc(l) {
+    const v = Number(l.discVal) || 0;
+    if (l.discTipo === 'R$') return bruto(l) > 0 ? Math.min(100, Math.max(0, v / bruto(l) * 100)) : 0;
+    return Math.min(100, Math.max(0, v));
+}
+const totalLinha = l => bruto(l) * (1 - pctDesc(l) / 100);
+const fmtPct = n => n.toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + '%';
+
+function atualizarLinha(l) {
+    const sub = document.getElementById('sub' + l.id);
+    if (sub) sub.innerHTML = (pctDesc(l) > 0 ? `<small>${brl(bruto(l))}</small>` : '') + brl(totalLinha(l));
+    const eq = document.getElementById('eq' + l.id);
+    if (eq) eq.textContent = l.discTipo === 'R$' && pctDesc(l) > 0 ? '= ' + fmtPct(pctDesc(l)) : '';
+    atualizarTotal();
+}
+function mudarDesc(id, v) {
     const l = venda.linhas.find(x => x.id === id);
-    if (l) { l.price = parseFloat(String(v).replace(',', '.')) || 0; atualizarTotal(); const s = document.getElementById('sub' + id); if (s) s.textContent = brl(l.qty * l.price); }
+    if (!l) return;
+    l.discVal = parseFloat(String(v).replace(',', '.')) || 0;
+    atualizarLinha(l);
+}
+function mudarTipoDesc(id, tipo) {
+    const l = venda.linhas.find(x => x.id === id);
+    if (!l || l.discTipo === tipo) return;
+    // mantém o mesmo desconto ao alternar entre % e R$
+    const p = pctDesc(l);
+    l.discTipo = tipo;
+    l.discVal = tipo === 'R$' ? Math.round(bruto(l) * p) / 100 : Math.round(p * 100) / 100;
+    renderLinhas();
 }
 function removerLinha(id) { venda.linhas = venda.linhas.filter(x => x.id !== id); renderLinhas(); }
 
 function atualizarTotal() {
-    $('nvTotal').textContent = brl(venda.linhas.reduce((s, l) => s + l.qty * l.price, 0));
+    $('nvTotal').textContent = brl(venda.linhas.reduce((s, l) => s + totalLinha(l), 0));
 }
 
 function renderLinhas() {
@@ -611,11 +652,20 @@ function renderLinhas() {
                 <div class="stepper">
                     <button onclick="mudarQtd(${l.id}, -1)">−</button><span>${l.qty}</span><button onclick="mudarQtd(${l.id}, 1)">+</button>
                 </div>
-                <div class="price"><input type="number" inputmode="decimal" step="0.01" value="${l.price}" onchange="mudarPreco(${l.id}, this.value)" oninput="mudarPreco(${l.id}, this.value)"></div>
-                <div class="sub" id="sub${l.id}">${brl(l.qty * l.price)}</div>
+                <div class="sub" id="sub${l.id}"></div>
+            </div>
+            <div class="desc">
+                <label>Desconto</label>
+                <div class="seg">
+                    <button class="${l.discTipo === '%' ? 'on' : ''}" onclick="mudarTipoDesc(${l.id}, '%')">%</button>
+                    <button class="${l.discTipo === 'R$' ? 'on' : ''}" onclick="mudarTipoDesc(${l.id}, 'R$')">R$</button>
+                </div>
+                <input type="number" inputmode="decimal" step="0.01" min="0" placeholder="0" value="${l.discVal || ''}" oninput="mudarDesc(${l.id}, this.value)">
+                <span class="eq" id="eq${l.id}"></span>
             </div>
             ${l.qty > l.estoque ? `<div class="warn-txt">Atenção: só há ${l.estoque} un em estoque.</div>` : ''}
         </div>`).join('');
+    venda.linhas.forEach(atualizarLinha);
     atualizarTotal();
 }
 
@@ -690,7 +740,7 @@ async function salvarVenda(confirmar) {
     const d = await api('save_sale_order', {
         partner_id: venda.partner.id,
         warehouse_id: meuLocal.wh.id,
-        lines: venda.linhas.map(l => ({ product_id: l.id, qty: l.qty, price: l.price })),
+        lines: venda.linhas.map(l => ({ product_id: l.id, qty: l.qty, price: l.price, discount: Number(pctDesc(l).toFixed(4)) })),
         date_order: venda.data ? new Date(venda.data).toISOString() : null,
         invoice_date: dataLocalAgora().slice(0, 10),
         confirm: confirmar
@@ -702,7 +752,7 @@ async function salvarVenda(confirmar) {
     if (d.success) {
         const avisos = (d.warnings || []).join(' ');
         toast(confirmar ? ('Venda lançada!' + (avisos ? ' ' + avisos : '')) : 'Orçamento salvo!', avisos ? 'err' : 'ok');
-        const total = venda.linhas.reduce((s, l) => s + l.qty * l.price, 0);
+        const total = venda.linhas.reduce((s, l) => s + totalLinha(l), 0);
         if (confirmar && d.invoice_id && d.invoice_posted) {
             // fatura já criada e lançada: abre direto o pagamento
             await abrirPagamento(d.invoice_id, total);
