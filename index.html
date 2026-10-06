@@ -134,6 +134,15 @@ input[disabled] { background: #f0f0f0; color: #555; }
 .fab.show { display: flex; }
 .fab:active { transform: scale(.94); background: var(--primary-dark); }
 
+
+/* Pop-up de pagamento */
+.modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 45; align-items: center; justify-content: center; padding: 16px; }
+.modal-bg.show { display: flex; }
+.modal { background: #fff; width: 100%; max-width: 420px; border-radius: 16px; padding: 22px 20px; }
+.modal h2 { font-size: 22px; color: var(--primary); margin-bottom: 4px; }
+.modal .acoes { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+.modal .acoes .btn { width: auto; margin-top: 0; padding: 12px 18px; font-size: 15px; }
+
 /* Seletor de local */
 .sheet-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 40; align-items: flex-end; justify-content: center; }
 .sheet-bg.show { display: flex; }
@@ -224,6 +233,23 @@ input[disabled] { background: #f0f0f0; color: #555; }
         <p>Será a origem das suas transferências e o local de saída das vendas.</p>
         <div id="sheetLista"></div>
         <button class="btn grey" id="sheetCancelar" onclick="fecharSeletorLocal()">Fechar</button>
+    </div>
+</div>
+
+<!-- Pagar fatura -->
+<div class="modal-bg" id="payBg">
+    <div class="modal">
+        <h2>Pagar Fatura</h2>
+        <label class="f">Conta</label>
+        <select id="payConta"></select>
+        <label class="f">Valor</label>
+        <input type="text" id="payValor" inputmode="decimal" autocomplete="off">
+        <label class="f">Data de Pagamento</label>
+        <input type="date" id="payData">
+        <div class="acoes">
+            <button class="btn grey" id="payDescartar" onclick="descartarPagamento()">Descartar</button>
+            <button class="btn" id="payCriar" onclick="criarPagamento()">Criar pagamento</button>
+        </div>
     </div>
 </div>
 
@@ -593,6 +619,63 @@ function renderLinhas() {
     atualizarTotal();
 }
 
+function voltarParaVendas() {
+    pilha = ['home', 'vendas'];
+    ir('vendas');
+    $('venBusca').value = '';
+    escolherStatus('all');
+}
+
+/* ============ Pagamento da fatura ============ */
+let pagFatura = null;
+let diariosCache = null;
+
+async function abrirPagamento(invoiceId, total) {
+    pagFatura = invoiceId;
+    if (!diariosCache) {
+        const d = await api('get_payment_journals');
+        diariosCache = d.result || [];
+    }
+    if (diariosCache.length === 0) { toast('Nenhuma conta de pagamento encontrada.', 'err'); return voltarParaVendas(); }
+    const ultima = localStorage.getItem('ultimaContaPgto');
+    $('payConta').innerHTML = diariosCache.map(c => `<option value="${c.id}"${String(c.id) === ultima ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
+    $('payValor').value = String(Math.round(total * 100) / 100).replace('.', ',');
+    $('payData').value = dataLocalAgora().slice(0, 10);
+    $('payBg').classList.add('show');
+}
+
+function descartarPagamento() {
+    $('payBg').classList.remove('show');
+    pagFatura = null;
+    voltarParaVendas();
+}
+
+async function criarPagamento() {
+    const valor = parseFloat(String($('payValor').value).replace(',', '.'));
+    if (!valor || valor <= 0) return toast('Informe o valor do pagamento.', 'err');
+    if (!$('payData').value) return toast('Informe a data do pagamento.', 'err');
+    const btn = $('payCriar'), btnD = $('payDescartar');
+    btn.disabled = btnD.disabled = true;
+    btn.textContent = 'Processando...';
+    const d = await api('register_payment', {
+        order_id: pagFatura,
+        journal_id: $('payConta').value,
+        amount: valor,
+        payment_date: $('payData').value
+    });
+    btn.disabled = btnD.disabled = false;
+    btn.textContent = 'Criar pagamento';
+    if (d.success) {
+        try { localStorage.setItem('ultimaContaPgto', $('payConta').value); } catch (e) {}
+        $('payBg').classList.remove('show');
+        pagFatura = null;
+        toast('Pagamento registrado!', 'ok');
+        voltarParaVendas();
+    } else {
+        toast(d.error || 'Erro ao registrar o pagamento.', 'err');
+    }
+}
+
 async function salvarVenda(confirmar) {
     if (!venda.partner) return toast('Selecione um cliente.', 'err');
     if (!meuLocal) return toast('Escolha o seu local.', 'err');
@@ -609,6 +692,7 @@ async function salvarVenda(confirmar) {
         warehouse_id: meuLocal.wh.id,
         lines: venda.linhas.map(l => ({ product_id: l.id, qty: l.qty, price: l.price })),
         date_order: venda.data ? new Date(venda.data).toISOString() : null,
+        invoice_date: dataLocalAgora().slice(0, 10),
         confirm: confirmar
     });
 
@@ -618,11 +702,13 @@ async function salvarVenda(confirmar) {
     if (d.success) {
         const avisos = (d.warnings || []).join(' ');
         toast(confirmar ? ('Venda lançada!' + (avisos ? ' ' + avisos : '')) : 'Orçamento salvo!', avisos ? 'err' : 'ok');
-        // volta para a lista de vendas mostrando as últimas
-        pilha = ['home', 'vendas'];
-        ir('vendas');
-        $('venBusca').value = '';
-        escolherStatus('all');
+        const total = venda.linhas.reduce((s, l) => s + l.qty * l.price, 0);
+        if (confirmar && d.invoice_id && d.invoice_posted) {
+            // fatura já criada e lançada: abre direto o pagamento
+            await abrirPagamento(d.invoice_id, total);
+        } else {
+            voltarParaVendas();
+        }
     } else {
         toast(d.error || 'Erro ao salvar a venda.', 'err');
     }
