@@ -500,7 +500,7 @@ export default async function handler(req, res) {
 
         // AÇÃO: CRIAR/ATUALIZAR PEDIDO DE VENDA (E, OPCIONALMENTE, CONFIRMAR + BAIXAR ESTOQUE + FATURAR)
         if (action === "save_sale_order") {
-            const { order_id, partner_id, payment_term_id, warehouse_id, lines, confirm, removed_line_ids, date_order } = body;
+            const { order_id, partner_id, payment_term_id, warehouse_id, lines, confirm, removed_line_ids, date_order, invoice_date } = body;
             // ISO (UTC) -> formato do Odoo "YYYY-MM-DD HH:MM:SS"
             let dateOrder = null;
             if (date_order) { const dt = new Date(date_order); if (!isNaN(dt)) dateOrder = dt.toISOString().slice(0, 19).replace("T", " "); }
@@ -546,6 +546,7 @@ export default async function handler(req, res) {
 
             let warnings = [];
             let invoiceId = null;
+            let invoicePosted = false;
 
             if (confirm) {
                 try {
@@ -592,6 +593,17 @@ export default async function handler(req, res) {
                     if (invoiceIds && invoiceIds.length > 0) {
                         invoiceId = invoiceIds[0];
                         await applyForcedAccountToInvoice(invoiceId);
+
+                        // A data da fatura é sempre o dia da operação (hoje), independente da data da venda
+                        const hoje = /^\d{4}-\d{2}-\d{2}$/.test(String(invoice_date || "")) ? invoice_date : new Date(Date.now() - 4 * 3600 * 1000).toISOString().slice(0, 10);
+                        try {
+                            await execute("account.move", "write", [[invoiceId], { invoice_date: hoje }]);
+                            // Lança a fatura já na hora, para que o pagamento possa ser registrado em seguida
+                            await execute("account.move", "action_post", [[invoiceId]]);
+                            invoicePosted = true;
+                        } catch (e) {
+                            warnings.push("Fatura criada, mas não foi possível lançá-la automaticamente: " + e.message);
+                        }
                     } else {
                         warnings.push("Pedido confirmado, mas ainda não havia nada a faturar. Use o botão \"Gerar Fatura\" no pedido depois de confirmar a entrega.");
                     }
@@ -600,7 +612,7 @@ export default async function handler(req, res) {
                 }
             }
 
-            return res.status(200).json({ success: true, id: orderId, invoice_id: invoiceId, warnings });
+            return res.status(200).json({ success: true, id: orderId, invoice_id: invoiceId, invoice_posted: invoicePosted, warnings });
         }
 
         // AÇÃO: GERAR A FATURA (RASCUNHO) DE UM PEDIDO JÁ CONFIRMADO (CASO AINDA NÃO TENHA FATURA)
