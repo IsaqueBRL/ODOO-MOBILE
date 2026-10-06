@@ -185,6 +185,10 @@ input[disabled] { background: #f0f0f0; color: #555; }
 .tab-row .q b { font-size: 24px; font-weight: 800; color: var(--primary); margin-right: 3px; }
 .tab-row .q.zero b { color: var(--danger); }
 
+
+.tab-row.click { cursor: pointer; }
+.tab-row.click:active { background: #f4eef2; }
+
 /* Pop-up de pagamento */
 .modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 45; align-items: center; justify-content: center; padding: 16px; }
 .modal-bg.show { display: flex; }
@@ -231,6 +235,7 @@ input[disabled] { background: #f0f0f0; color: #555; }
 <!-- ESTOQUE -->
 <section class="screen" id="estoque">
     <input type="text" id="estBusca" placeholder="Nome do produto..." oninput="debounce('est', buscarEstoque)">
+    <button type="button" class="btn-add" style="margin:0 0 12px" onclick="abrirAdicionarEstoque()">＋ Adicionar item que não está na lista</button>
     <div id="estStatus" class="status"></div>
     <div class="tabela" id="estTabela" style="display:none">
         <div class="tab-head"><span>Descrição</span><button type="button" id="estOrdem" onclick="alternarOrdemEstoque()">Quantidade <i>⇅</i></button></div>
@@ -301,6 +306,34 @@ input[disabled] { background: #f0f0f0; color: #555; }
         <div class="acoes">
             <button class="btn grey" id="payDescartar" onclick="descartarPagamento()">Descartar</button>
             <button class="btn" id="payCriar" onclick="criarPagamento()">Criar pagamento</button>
+        </div>
+    </div>
+</div>
+
+<!-- Ajuste de estoque -->
+<div class="modal-bg" id="ajBg">
+    <div class="modal">
+        <h2>Ajustar estoque</h2>
+        <div id="ajNome" style="font-weight:700;margin:6px 0 2px"></div>
+        <div id="ajAtual" style="font-size:13px;color:var(--muted)"></div>
+        <label class="f">Nova quantidade</label>
+        <input type="text" id="ajQtd" inputmode="decimal" autocomplete="off" onkeydown="if(event.key==='Enter')salvarAjuste()">
+        <div class="acoes">
+            <button class="btn grey" id="ajCancelar" onclick="fecharAjuste()">Descartar</button>
+            <button class="btn" id="ajSalvar" onclick="salvarAjuste()">Salvar</button>
+        </div>
+    </div>
+</div>
+
+<!-- Adicionar item ao estoque -->
+<div class="modal-bg" id="addBg">
+    <div class="modal" style="padding:18px 0 0">
+        <h2 style="padding:0 20px">Adicionar ao estoque</h2>
+        <div style="padding:8px 16px 10px"><input type="text" id="addBusca" placeholder="Nome do produto..." oninput="debounce('add', buscarAdicionaveis)" autocomplete="off"></div>
+        <div id="addStatus" class="status" style="padding:0 16px 6px"></div>
+        <div class="prod-body" id="addLista" style="max-height:50vh"></div>
+        <div class="acoes" style="margin:0;padding:12px 16px;border-top:1px solid var(--border)">
+            <button class="btn grey" onclick="fecharAdicionar()">Fechar</button>
         </div>
     </div>
 </div>
@@ -479,7 +512,14 @@ async function buscarEstoque() {
     if (!d.result) { $('estStatus').textContent = d.error || 'Erro ao carregar estoque.'; return; }
     if (d.result.length === 0) { estDados = []; $('estTabela').style.display = 'none'; $('estStatus').textContent = 'Nenhum item em estoque encontrado.'; return; }
     $('estStatus').textContent = d.result.length + ' item(ns) encontrado(s)';
-    estDados = d.result.map(i => ({ nome: Array.isArray(i.product_id) ? i.product_id[1] : '-', qtd: Number(i.quantity) || 0 }));
+    const porProduto = {};
+    d.result.forEach(i => {
+        if (!Array.isArray(i.product_id)) return;
+        const pid = i.product_id[0];
+        if (!porProduto[pid]) porProduto[pid] = { id: pid, nome: i.product_id[1], qtd: 0 };
+        porProduto[pid].qtd += Number(i.quantity) || 0;
+    });
+    estDados = Object.values(porProduto);
     renderEstoque();
 }
 
@@ -497,10 +537,76 @@ function renderEstoque() {
     $('estOrdem').querySelector('i').textContent = estOrdem === 'desc' ? '↓' : estOrdem === 'asc' ? '↑' : '⇅';
     $('estTabela').style.display = '';
     $('estLista').innerHTML = itens.map(i => `
-        <div class="tab-row">
+        <div class="tab-row click" onclick="abrirAjuste(${i.id})">
             <div class="d">${esc(i.nome)}</div>
             <div class="q${i.qtd <= 0 ? ' zero' : ''}"><b>${i.qtd}</b>un.</div>
         </div>`).join('');
+}
+
+
+/* ============ Ajuste de estoque ============ */
+let ajProduto = null;
+const fmtQtd = n => Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
+
+function abrirAjuste(id, nome, atual) {
+    const item = estDados.find(x => x.id === id);
+    ajProduto = { id, nome: item ? item.nome : nome, atual: item ? item.qtd : (atual || 0) };
+    $('ajNome').textContent = ajProduto.nome;
+    $('ajAtual').textContent = 'Quantidade atual: ' + fmtQtd(ajProduto.atual) + ' un.';
+    $('ajQtd').value = String(ajProduto.atual).replace('.', ',');
+    $('ajBg').classList.add('show');
+    setTimeout(() => { $('ajQtd').focus(); $('ajQtd').select(); }, 50);
+}
+function fecharAjuste() { $('ajBg').classList.remove('show'); ajProduto = null; }
+
+async function salvarAjuste() {
+    if (!ajProduto) return;
+    const qtd = parseFloat(String($('ajQtd').value).replace(',', '.'));
+    if (isNaN(qtd) || qtd < 0) return toast('Informe uma quantidade válida (0 ou mais).', 'err');
+    if (qtd === ajProduto.atual) return fecharAjuste();
+    if (!(await garantirLocalDeEstoque())) return toast('Não foi possível identificar o local de estoque.', 'err');
+    const btn = $('ajSalvar'), btnC = $('ajCancelar');
+    btn.disabled = btnC.disabled = true;
+    btn.textContent = 'Salvando...';
+    const d = await api('adjust_stock', { product_id: ajProduto.id, location_id: meuLocal.loc.id, quantity: qtd });
+    btn.disabled = btnC.disabled = false;
+    btn.textContent = 'Salvar';
+    if (d.success) {
+        fecharAjuste();
+        toast('Estoque ajustado!', 'ok');
+        buscarEstoque();
+    } else {
+        toast(d.error || 'Erro ao ajustar o estoque.', 'err');
+    }
+}
+
+/* ---- adicionar item que ainda não está no estoque ---- */
+let addReq = 0;
+async function abrirAdicionarEstoque() {
+    $('addBusca').value = '';
+    $('addLista').innerHTML = '';
+    $('addBg').classList.add('show');
+    buscarAdicionaveis();
+}
+function fecharAdicionar() { $('addBg').classList.remove('show'); }
+
+let addDados = [];
+async function buscarAdicionaveis() {
+    const req = ++addReq;
+    $('addStatus').textContent = 'Carregando...';
+    if (!(await garantirLocalDeEstoque())) { $('addStatus').textContent = 'Não foi possível identificar o local de estoque.'; return; }
+    const d = await api('get_addable_products', { location_id: meuLocal.loc.id, query: $('addBusca').value.trim() });
+    if (req !== addReq) return;
+    if (!d.products) { $('addStatus').textContent = d.error || 'Erro ao carregar produtos.'; return; }
+    addDados = d.products;
+    $('addStatus').textContent = d.products.length ? d.products.length + ' item(ns) fora do estoque' : 'Nenhum item encontrado.';
+    $('addLista').innerHTML = d.products.map(p => `<button type="button" class="prod-item" style="grid-template-columns:1fr" onclick="escolherAdicionar(${p.id})"><span>${esc(p.display_name)}</span></button>`).join('');
+}
+function escolherAdicionar(id) {
+    const p = addDados.find(x => x.id === id);
+    if (!p) return;
+    fecharAdicionar();
+    abrirAjuste(id, p.display_name, 0);
 }
 
 /* ============ Vendas (só carrega depois de escolher um filtro) ============ */
