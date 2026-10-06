@@ -500,7 +500,10 @@ export default async function handler(req, res) {
 
         // AÇÃO: CRIAR/ATUALIZAR PEDIDO DE VENDA (E, OPCIONALMENTE, CONFIRMAR + BAIXAR ESTOQUE + FATURAR)
         if (action === "save_sale_order") {
-            const { order_id, partner_id, payment_term_id, warehouse_id, lines, confirm, removed_line_ids } = body;
+            const { order_id, partner_id, payment_term_id, warehouse_id, lines, confirm, removed_line_ids, date_order } = body;
+            // ISO (UTC) -> formato do Odoo "YYYY-MM-DD HH:MM:SS"
+            let dateOrder = null;
+            if (date_order) { const dt = new Date(date_order); if (!isNaN(dt)) dateOrder = dt.toISOString().slice(0, 19).replace("T", " "); }
 
             if (!partner_id) return res.status(400).json({ error: "Selecione um cliente para o pedido." });
             const validLines = (lines || []).filter(l => l.product_id);
@@ -513,6 +516,7 @@ export default async function handler(req, res) {
                 payment_term_id: payment_term_id ? Number(payment_term_id) : false
             };
             if (warehouse_id) headerData.warehouse_id = Number(warehouse_id);
+            if (dateOrder) headerData.date_order = dateOrder;
 
             if (!orderId) {
                 headerData.order_line = validLines.map(l => [0, 0, {
@@ -548,6 +552,12 @@ export default async function handler(req, res) {
                     await execute("sale.order", "action_confirm", [[orderId]]);
                 } catch (e) {
                     return res.status(200).json({ success: true, id: orderId, warnings: ["Pedido salvo, mas não foi possível confirmá-lo: " + e.message] });
+                }
+
+                // O Odoo regrava a data do pedido com "agora" ao confirmar; restaura a data escolhida
+                if (dateOrder) {
+                    try { await execute("sale.order", "write", [[orderId], { date_order: dateOrder }]); }
+                    catch (e) { warnings.push("Não foi possível manter a data escolhida no pedido: " + e.message); }
                 }
 
                 // Tenta validar a(s) entrega(s) geradas, definindo a quantidade feita = quantidade pedida,
