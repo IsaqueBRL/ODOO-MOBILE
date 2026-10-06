@@ -729,6 +729,84 @@ export default async function handler(req, res) {
             return res.status(200).json({ result: result || [] });
         }
 
+        // AÇÃO: PRODUTOS QUE PODEM SER ADICIONADOS AO ESTOQUE
+        // (mercadorias com "Vendas" marcado que ainda NÃO têm saldo no local; quem já tem saldo fica de fora para não duplicar)
+        if (action === "get_addable_products") {
+            const locationId = Number(body.location_id) || 0;
+            if (!locationId) return res.status(400).json({ error: "Local é obrigatório." });
+            const query = String(body.query || "").trim();
+
+            const quants = await execute("stock.quant", "search_read", [[
+                ["location_id", "child_of", locationId],
+                ["location_id.usage", "=", "internal"],
+                ["quantity", ">", 0]
+            ]], { fields: ["product_id"], limit: 10000 });
+            const have = [...new Set((quants || []).filter(q => Array.isArray(q.product_id)).map(q => q.product_id[0]))];
+
+            const domain = [...PRODUCT_BASE_DOMAIN];
+            if (have.length) domain.push(["id", "not in", have]);
+            if (query) domain.push(["name", "ilike", query]);
+            const products = await execute("product.product", "search_read", [domain], { fields: ["id", "display_name"], limit: 300 });
+            const list = (products || []).sort((a, b) => (a.display_name || "").localeCompare(b.display_name || "", "pt-BR"));
+            return res.status(200).json({ products: list });
+        }
+
+        // AÇÃO: AJUSTAR A QUANTIDADE EM ESTOQUE DE UM PRODUTO NO LOCAL (inventário)
+        if (action === "adjust_stock") {
+            const productId = Number(body.product_id) || 0;
+            const locationId = Number(body.location_id) || 0;
+            const newQty = Number(body.quantity);
+            if (!productId || !locationId) return res.status(400).json({ error: "Produto e local são obrigatórios." });
+            if (!isFinite(newQty) || newQty < 0) return res.status(400).json({ error: "Informe uma quantidade válida (0 ou mais)." });
+
+            // produto que não rastreia inventário não pode ter saldo no Odoo
+            try {
+                const p = await execute("product.product", "read", [[productId]], { fields: ["is_storable"] });
+                if (p && p[0] && p[0].is_storable === false) {
+                    return res.status(400).json({ error: "Este produto não rastreia inventário. No Odoo, ative \"Rastrear inventário\" nele e tente de novo." });
+                }
+            } catch (e) { /* versão do Odoo sem esse campo: segue */ }
+
+            const ctx = { inventory_mode: true, inventory_name: "Ajuste pelo app mobile" };
+            const somaAtual = async () => {
+                const qs = await execute("stock.quant", "search_read", [[
+                    ["product_id", "=", productId],
+                    ["location_id", "child_of", locationId],
+                    ["location_id.usage", "=", "internal"]
+                ]], { fields: ["quantity"] });
+                return (qs || []).reduce((s, q) => s + q.quantity, 0);
+            };
+
+            const atual = await somaAtual();
+            const delta = newQty - atual;
+            if (Math.abs(delta) < 1e-9) return res.status(200).json({ success: true, quantity: atual });
+
+            // o ajuste é feito no próprio local; o saldo que está em sublocais é somado ao total mostrado na tela
+            const exact = await execute("stock.quant", "search_read", [[
+                ["product_id", "=", productId], ["location_id", "=", locationId]
+            ]], { fields: ["id", "quantity"], limit: 1 });
+            const base = exact && exact[0] ? exact[0].quantity : 0;
+            const target = base + delta;
+            if (target < -1e-9) {
+                return res.status(400).json({ error: "Parte desse estoque está em sublocais e não dá para reduzir até essa quantidade por aqui. Ajuste direto no Odoo." });
+            }
+
+            let qid;
+            if (exact && exact[0]) {
+                qid = exact[0].id;
+                await execute("stock.quant", "write", [[qid], { inventory_quantity: target }], { context: ctx });
+            } else {
+                qid = await execute("stock.quant", "create", [{ product_id: productId, location_id: locationId, inventory_quantity: target }], { context: ctx });
+            }
+            await execute("stock.quant", "action_apply_inventory", [[qid]], { context: ctx });
+
+            const depois = await somaAtual();
+            if (Math.abs(depois - newQty) > 1e-6) {
+                return res.status(500).json({ error: "O Odoo não aplicou o ajuste (o produto pode usar lote/série). Confira no Odoo." });
+            }
+            return res.status(200).json({ success: true, quantity: depois });
+        }
+
         // AÇÃO: BUSCAR PEDIDOS DE VENDAS
         if (action === "get_sales") {
             const query = body.query || "";
