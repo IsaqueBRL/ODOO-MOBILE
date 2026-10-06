@@ -171,6 +171,20 @@ input[disabled] { background: #f0f0f0; color: #555; }
 .btn-add:active { background: #e6d3e2; }
 .btn-add[disabled] { opacity: .6; }
 
+
+/* Tabela de estoque */
+.tabela { background: #fff; border: 1px solid var(--border); border-radius: 16px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.04); }
+.tab-head, .tab-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; padding: 0 18px; }
+.tab-head { background: #f7f7fa; border-bottom: 1px solid var(--border); font-size: 14px; font-weight: 700; color: #6b6b78; min-height: 50px; }
+.tab-head button { background: none; border: none; font: inherit; color: inherit; cursor: pointer; padding: 14px 0 14px 12px; }
+.tab-head button i { font-style: normal; font-size: 12px; opacity: .8; }
+.tab-row { min-height: 64px; border-bottom: 1px solid #eee; }
+.tab-row:last-child { border-bottom: none; }
+.tab-row .d { font-weight: 700; font-size: 15px; text-transform: uppercase; }
+.tab-row .q { text-align: right; white-space: nowrap; color: #666; font-size: 13px; font-weight: 600; }
+.tab-row .q b { font-size: 24px; font-weight: 800; color: var(--primary); margin-right: 3px; }
+.tab-row .q.zero b { color: var(--danger); }
+
 /* Pop-up de pagamento */
 .modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 45; align-items: center; justify-content: center; padding: 16px; }
 .modal-bg.show { display: flex; }
@@ -218,7 +232,10 @@ input[disabled] { background: #f0f0f0; color: #555; }
 <section class="screen" id="estoque">
     <input type="text" id="estBusca" placeholder="Nome do produto..." oninput="debounce('est', buscarEstoque)">
     <div id="estStatus" class="status"></div>
-    <div id="estLista"></div>
+    <div class="tabela" id="estTabela" style="display:none">
+        <div class="tab-head"><span>Descrição</span><button type="button" id="estOrdem" onclick="alternarOrdemEstoque()">Quantidade <i>⇅</i></button></div>
+        <div id="estLista"></div>
+    </div>
 </section>
 
 <!-- VENDAS -->
@@ -410,7 +427,7 @@ function ir(tela) {
     $('btnLocal').style.display = home ? 'flex' : 'none';
     $('chipLocal').style.display = home ? 'none' : 'inline-block';
     $('btnBack').classList.toggle('show', !home);
-    $('fab').classList.toggle('show', ['home', 'estoque', 'vendas'].includes(tela));
+    $('fab').classList.toggle('show', ['home', 'vendas'].includes(tela));
     window.scrollTo(0, 0);
 }
 function abrir(tela) { pilha.push(tela); ir(tela); }
@@ -440,7 +457,7 @@ async function garantirLocalDeEstoque() {
 function abrirEstoque() {
     exigirLocal(async () => {
         $('estBusca').value = '';
-        $('estLista').innerHTML = '';
+        $('estLista').innerHTML = ''; $('estTabela').style.display = 'none';
         $('estStatus').textContent = 'Carregando estoque...';
         if (pilha[pilha.length - 1] !== 'estoque') abrir('estoque');
         buscarEstoque();
@@ -460,12 +477,29 @@ async function buscarEstoque() {
     const d = await api('get_stock', { query, location_id: meuLocal.loc.id });
     if (req !== estReq) return;
     if (!d.result) { $('estStatus').textContent = d.error || 'Erro ao carregar estoque.'; return; }
-    if (d.result.length === 0) { $('estLista').innerHTML = ''; $('estStatus').textContent = 'Nenhum item em estoque encontrado.'; return; }
+    if (d.result.length === 0) { estDados = []; $('estTabela').style.display = 'none'; $('estStatus').textContent = 'Nenhum item em estoque encontrado.'; return; }
     $('estStatus').textContent = d.result.length + ' item(ns) encontrado(s)';
-    $('estLista').innerHTML = d.result.map(i => `
-        <div class="card row">
-            <div class="t">${esc(Array.isArray(i.product_id) ? i.product_id[1] : '-')}</div>
-            <span class="badge b-ok">${i.quantity ?? 0} un</span>
+    estDados = d.result.map(i => ({ nome: Array.isArray(i.product_id) ? i.product_id[1] : '-', qtd: Number(i.quantity) || 0 }));
+    renderEstoque();
+}
+
+let estDados = [], estOrdem = null;   // estOrdem: null (nome), 'desc' ou 'asc' pela quantidade
+
+function alternarOrdemEstoque() {
+    estOrdem = estOrdem === 'desc' ? 'asc' : 'desc';
+    renderEstoque();
+}
+
+function renderEstoque() {
+    const itens = estDados.slice();
+    if (estOrdem) itens.sort((a, b) => estOrdem === 'desc' ? b.qtd - a.qtd : a.qtd - b.qtd);
+    else itens.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+    $('estOrdem').querySelector('i').textContent = estOrdem === 'desc' ? '↓' : estOrdem === 'asc' ? '↑' : '⇅';
+    $('estTabela').style.display = '';
+    $('estLista').innerHTML = itens.map(i => `
+        <div class="tab-row">
+            <div class="d">${esc(i.nome)}</div>
+            <div class="q${i.qtd <= 0 ? ' zero' : ''}"><b>${i.qtd}</b>un.</div>
         </div>`).join('');
 }
 
