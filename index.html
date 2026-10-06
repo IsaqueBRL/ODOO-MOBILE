@@ -103,6 +103,13 @@ input[disabled] { background: #f0f0f0; color: #555; }
 .btn-local span.nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip-local { display: none; background: rgba(255,255,255,.18); color: #fff; border: none; border-radius: 999px; padding: 8px 12px; font-size: 13px; font-weight: 700; cursor: pointer; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+@keyframes pulsoLocal {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(255,255,255,0); }
+    50% { opacity: .72; box-shadow: 0 0 0 4px rgba(255,255,255,.22); }
+}
+.btn-local, .chip-local { animation: pulsoLocal 2.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .btn-local, .chip-local { animation: none; } }
+
 /* Bola flutuante: Nova venda */
 .fab { position: fixed; right: 18px; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); width: 66px; height: 66px; border-radius: 50%; border: none; background: var(--primary); color: #fff; font-size: 30px; box-shadow: 0 6px 16px rgba(0,0,0,.3); cursor: pointer; z-index: 20; display: none; align-items: center; justify-content: center; }
 .fab.show { display: flex; }
@@ -146,11 +153,6 @@ input[disabled] { background: #f0f0f0; color: #555; }
 <!-- ESTOQUE -->
 <section class="screen" id="estoque">
     <input type="text" id="estBusca" placeholder="Nome do produto..." oninput="debounce('est', buscarEstoque)">
-    <label class="f">Local</label>
-    <select id="estLocal" onchange="buscarEstoque()">
-        <option value="">Selecione um local...</option>
-        <option value="all">Todos os locais</option>
-    </select>
     <div id="estStatus" class="status"></div>
     <div id="estLista"></div>
 </section>
@@ -304,7 +306,12 @@ function escolherLocal(id) {
 
     const cb = aoEscolherLocal; aoEscolherLocal = null;
     if (cb) cb();
-    else if (pilha[pilha.length - 1] === 'novaVenda' && venda) carregarProdutosDoLocal();   // trocou o local no meio da venda
+    else {
+        const tela = pilha[pilha.length - 1];
+        if (tela === 'novaVenda' && venda) carregarProdutosDoLocal();       // trocou o local no meio da venda
+        else if (tela === 'estoque') buscarEstoque();
+        else if (tela === 'vendas' && (venStatus || $('venBusca').value.trim())) carregarVendas();
+    }
 }
 
 /* ============ Navegação ============ */
@@ -329,45 +336,52 @@ function voltar() {
     ir(pilha[pilha.length - 1]);
 }
 
-/* ============ Estoque (só carrega depois de escolher um filtro) ============ */
-let estReq = 0, locaisCarregados = false;
+/* ============ Estoque (sempre do local que o usuário escolheu) ============ */
+let estReq = 0;
 
-async function abrirEstoque() {
-    $('estBusca').value = ''; $('estLocal').value = '';
-    $('estLista').innerHTML = '';
-    $('estStatus').textContent = 'Escolha um local ou digite o nome do produto.';
-    abrir('estoque');
-    if (!locaisCarregados) {
-        const d = await api('get_locations');
-        if (d.result) {
-            $('estLocal').innerHTML = '<option value="">Selecione um local...</option><option value="all">Todos os locais</option>' +
-                d.result.map(l => `<option value="${l.id}">${esc(l.complete_name)}</option>`).join('');
-            locaisCarregados = true;
-        } else {
-            toast(d.error || 'Não foi possível carregar os locais.', 'err');
-        }
+// Garante que temos o local de estoque (ex.: SHOP DO PÉ/Estoque) do local escolhido
+async function garantirLocalDeEstoque() {
+    if (!meuLocal || meuLocal.loc) return !!meuLocal;
+    if (!armazensCache) {
+        const d = await api('get_warehouses');
+        if (d.result) armazensCache = d.result;
     }
+    const w = (armazensCache || []).find(x => x.id === meuLocal.wh.id);
+    if (w && Array.isArray(w.lot_stock_id)) {
+        meuLocal.loc = { id: w.lot_stock_id[0], name: w.lot_stock_id[1] };
+        try { localStorage.setItem('deuris_meu_local', JSON.stringify(meuLocal)); } catch (e) {}
+    }
+    return !!meuLocal.loc;
+}
+
+function abrirEstoque() {
+    exigirLocal(async () => {
+        $('estBusca').value = '';
+        $('estLista').innerHTML = '';
+        $('estStatus').textContent = 'Carregando estoque...';
+        if (pilha[pilha.length - 1] !== 'estoque') abrir('estoque');
+        buscarEstoque();
+    });
 }
 
 async function buscarEstoque() {
+    if (!meuLocal) return;
     const query = $('estBusca').value.trim();
-    const loc = $('estLocal').value;
     const req = ++estReq;
-    if (!query && !loc) {
-        $('estLista').innerHTML = '';
-        $('estStatus').textContent = 'Escolha um local ou digite o nome do produto.';
+    $('estStatus').textContent = 'Pesquisando...';
+
+    if (!(await garantirLocalDeEstoque())) {
+        if (req === estReq) $('estStatus').textContent = 'Não foi possível identificar o estoque do seu local. Atualize o arquivo api/odoo.js.';
         return;
     }
-    $('estStatus').textContent = 'Pesquisando...';
-    const d = await api('get_stock', { query, location_id: loc === 'all' ? null : loc });
+    const d = await api('get_stock', { query, location_id: meuLocal.loc.id });
     if (req !== estReq) return;
     if (!d.result) { $('estStatus').textContent = d.error || 'Erro ao carregar estoque.'; return; }
     if (d.result.length === 0) { $('estLista').innerHTML = ''; $('estStatus').textContent = 'Nenhum item em estoque encontrado.'; return; }
     $('estStatus').textContent = d.result.length + ' item(ns) encontrado(s)';
     $('estLista').innerHTML = d.result.map(i => `
         <div class="card row">
-            <div><div class="t">${esc(Array.isArray(i.product_id) ? i.product_id[1] : '-')}</div>
-            <div class="s">${esc(Array.isArray(i.location_id) ? i.location_id[1] : '-')}</div></div>
+            <div class="t">${esc(Array.isArray(i.product_id) ? i.product_id[1] : '-')}</div>
             <span class="badge b-ok">${i.quantity ?? 0} un</span>
         </div>`).join('');
 }
@@ -399,7 +413,7 @@ async function carregarVendas() {
         return;
     }
     $('venStatus').textContent = 'Carregando...';
-    const d = await api('get_sales', { query, order_status: (venStatus && venStatus !== 'all') ? venStatus : '' });
+    const d = await api('get_sales', { query, warehouse_id: meuLocal ? meuLocal.wh.id : '', order_status: (venStatus && venStatus !== 'all') ? venStatus : '' });
     if (req !== venReq) return;
     if (!d.result) { $('venStatus').textContent = d.error || 'Erro ao carregar vendas.'; return; }
     if (d.result.length === 0) { $('venLista').innerHTML = ''; $('venStatus').textContent = 'Nenhuma venda encontrada.'; return; }
@@ -415,7 +429,7 @@ async function carregarVendas() {
     $('venLista').innerHTML = d.result.map(o => `
         <div class="card">
             <div class="row"><div class="t">${esc(o.name)}</div><div class="money">${brl(o.amount_total)}</div></div>
-            <div class="s">${esc(Array.isArray(o.partner_id) ? o.partner_id[1] : '-')} · ${esc(Array.isArray(o.warehouse_id) ? o.warehouse_id[1] : '-')}</div>
+            <div class="s">${esc(Array.isArray(o.partner_id) ? o.partner_id[1] : '-')}</div>
             <div class="s">${dataHora(o.date_order)}</div>
             <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap">${stBadge(o.state)} ${o.state !== 'cancel' ? pgBadge(o.payment_summary) : ''}</div>
         </div>`).join('');
