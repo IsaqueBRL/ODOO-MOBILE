@@ -98,8 +98,27 @@ input[disabled] { background: #f0f0f0; color: #555; }
 .warn-txt { color: var(--danger); font-size: 12px; margin-top: 6px; font-weight: 600; }
 .sum { display: flex; justify-content: space-between; font-size: 20px; font-weight: 800; margin-top: 16px; color: var(--primary); }
 
+/* Botão de local (cabeçalho) */
+.btn-local { flex: 1; display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,.18); color: #fff; border: none; border-radius: 12px; padding: 11px 14px; font-size: 17px; font-weight: 700; cursor: pointer; text-align: left; min-width: 0; }
+.btn-local span.nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip-local { display: none; background: rgba(255,255,255,.18); color: #fff; border: none; border-radius: 999px; padding: 8px 12px; font-size: 13px; font-weight: 700; cursor: pointer; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Bola flutuante: Nova venda */
+.fab { position: fixed; right: 18px; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); width: 66px; height: 66px; border-radius: 50%; border: none; background: var(--primary); color: #fff; font-size: 30px; box-shadow: 0 6px 16px rgba(0,0,0,.3); cursor: pointer; z-index: 20; display: none; align-items: center; justify-content: center; }
+.fab.show { display: flex; }
+.fab:active { transform: scale(.94); background: var(--primary-dark); }
+
+/* Seletor de local */
+.sheet-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 40; align-items: flex-end; justify-content: center; }
+.sheet-bg.show { display: flex; }
+.sheet { background: #fff; width: 100%; max-width: 560px; border-radius: 18px 18px 0 0; padding: 18px 16px calc(18px + env(safe-area-inset-bottom, 0px)); max-height: 80vh; overflow-y: auto; }
+.sheet h2 { font-size: 18px; color: var(--primary); margin-bottom: 4px; }
+.sheet p { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+.sheet .opt { display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 16px 14px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 12px; background: #fff; font-size: 16px; font-weight: 600; cursor: pointer; text-align: left; }
+.sheet .opt.on { border-color: var(--primary); background: #f4eef2; color: var(--primary); }
+
 /* Toast */
-#toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%) translateY(30px); background: #333; color: #fff; padding: 13px 18px; border-radius: 12px; font-size: 15px; max-width: 90%; text-align: center; opacity: 0; pointer-events: none; transition: .25s; z-index: 50; }
+#toast { position: fixed; left: 50%; bottom: calc(100px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%) translateY(30px); background: #333; color: #fff; padding: 13px 18px; border-radius: 12px; font-size: 15px; max-width: 90%; text-align: center; opacity: 0; pointer-events: none; transition: .25s; z-index: 50; }
 #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 #toast.err { background: var(--danger); }
 #toast.ok { background: var(--ok); }
@@ -109,20 +128,18 @@ input[disabled] { background: #f0f0f0; color: #555; }
 
 <header class="bar">
     <button class="btn-back" id="btnBack" onclick="voltar()" aria-label="Voltar">←</button>
-    <h1 id="titulo">Deuris Candy 2</h1>
+    <button class="btn-local" id="btnLocal" onclick="abrirSeletorLocal()"><span>📍</span><span class="nm" id="btnLocalNome">Escolher local</span><span>▾</span></button>
+    <h1 id="titulo" style="display:none">Estoque</h1>
+    <button class="chip-local" id="chipLocal" onclick="abrirSeletorLocal()">📍 Local</button>
 </header>
 
 <main>
 
 <!-- HOME -->
 <section class="screen active" id="home">
-    <p class="hello">Ferramentas rápidas</p>
     <div class="grid">
-        <div class="tile wide" onclick="abrirNovaVenda()"><span class="ico">🛒</span> Nova venda</div>
         <div class="tile" onclick="abrirEstoque()"><span class="ico">📦</span>Estoque</div>
         <div class="tile" onclick="abrirVendas()"><span class="ico">🧾</span>Vendas</div>
-        <div class="tile" onclick="abrirSaldos()"><span class="ico">💰</span>Saldos</div>
-        <div class="tile" onclick="abrirTransfContas()"><span class="ico">🔁</span>Transferir entre contas</div>
     </div>
 </section>
 
@@ -140,8 +157,7 @@ input[disabled] { background: #f0f0f0; color: #555; }
 
 <!-- VENDAS -->
 <section class="screen" id="vendas">
-    <button class="btn" style="margin-top:0" onclick="abrirNovaVenda()">+ Nova venda</button>
-    <input type="text" id="venBusca" style="margin-top:12px" placeholder="Número do pedido ou cliente..." oninput="debounce('ven', () => carregarVendas(true))">
+ <input type="text" id="venBusca" placeholder="Número do pedido ou cliente..." oninput="debounce('ven', () => carregarVendas(true))">
     <div class="chips">
         <button class="chip" data-st="all" onclick="escolherStatus('all')">Últimas</button>
         <button class="chip" data-st="draft" onclick="escolherStatus('draft')">Orçamentos</button>
@@ -157,12 +173,12 @@ input[disabled] { background: #f0f0f0; color: #555; }
     <label class="f" style="margin-top:0">Cliente *</label>
     <div id="nvClienteBox"></div>
 
-    <label class="f">Local de estoque (armazém) *</label>
-    <select id="nvArmazem" onchange="trocarArmazem()"><option value="">Selecione...</option></select>
+    <label class="f">Saída do estoque</label>
+    <div class="picked"><span id="nvLocalNome">-</span><button onclick="abrirSeletorLocal()">trocar</button></div>
 
     <label class="f">Adicionar produto</label>
     <select id="nvProduto" onchange="adicionarProduto(this.value); this.value='';" disabled>
-        <option value="">Escolha o armazém primeiro</option>
+        <option value="">Carregando produtos...</option>
     </select>
 
     <div id="nvLinhas"></div>
@@ -173,29 +189,19 @@ input[disabled] { background: #f0f0f0; color: #555; }
     <button class="btn sec" id="btnOrcamento" onclick="salvarVenda(false)">Salvar Orçamento</button>
 </section>
 
-<!-- SALDOS -->
-<section class="screen" id="saldos">
-    <div id="salStatus" class="status">Carregando...</div>
-    <div id="salLista"></div>
-</section>
-
-<!-- TRANSFERÊNCIA ENTRE CONTAS -->
-<section class="screen" id="transfContas">
-    <label class="f" style="margin-top:0">Diário</label>
-    <input type="text" id="tcDiario" disabled>
-    <label class="f">Data contábil</label>
-    <input type="text" id="tcData" disabled>
-    <label class="f">Conta de origem (de onde sai o valor)</label>
-    <select id="tcDe"></select>
-    <label class="f">Conta de destino (para onde entra o valor)</label>
-    <select id="tcPara"></select>
-    <label class="f">Valor (R$)</label>
-    <input type="number" id="tcValor" inputmode="decimal" step="0.01" min="0.01" placeholder="0,00">
-    <button class="btn" id="btnLancarTc" onclick="lancarTransfContas()">Lançar</button>
-    <button class="btn grey" onclick="voltar()">Cancelar</button>
-</section>
-
 </main>
+
+<button class="fab" id="fab" onclick="abrirNovaVenda()" aria-label="Nova venda">🛒</button>
+
+<!-- Seletor de local -->
+<div class="sheet-bg" id="sheetBg" onclick="if(event.target===this) fecharSeletorLocal()">
+    <div class="sheet">
+        <h2>Escolha o seu local</h2>
+        <p>Será a origem das suas transferências e o local de saída das vendas.</p>
+        <div id="sheetLista"></div>
+        <button class="btn grey" id="sheetCancelar" onclick="fecharSeletorLocal()">Fechar</button>
+    </div>
+</div>
 
 <div id="toast"></div>
 
@@ -238,15 +244,83 @@ async function api(action, dados = {}) {
 const timers = {};
 function debounce(k, fn, ms = 450) { clearTimeout(timers[k]); timers[k] = setTimeout(fn, ms); }
 
+/* ============ Meu local (origem das vendas e transferências) ============ */
+let meuLocal = null;           // { wh: {id, name}, loc: {id, name} | null }
+let armazensCache = null;
+let aoEscolherLocal = null;
+
+try { meuLocal = JSON.parse(localStorage.getItem('deuris_meu_local') || 'null'); } catch (e) { meuLocal = null; }
+
+function atualizarRotuloLocal() {
+    const nome = meuLocal ? meuLocal.wh.name : 'Escolher local';
+    $('btnLocalNome').textContent = nome;
+    $('chipLocal').textContent = '📍 ' + (meuLocal ? meuLocal.wh.name : 'Escolher');
+}
+
+function exigirLocal(cb) {
+    if (meuLocal) return cb();
+    abrirSeletorLocal(true, cb);
+}
+
+async function abrirSeletorLocal(obrigatorio, cb) {
+    aoEscolherLocal = cb || null;
+    $('sheetCancelar').style.display = obrigatorio ? 'none' : 'block';
+    $('sheetBg').dataset.obrigatorio = obrigatorio ? '1' : '';
+    $('sheetBg').classList.add('show');
+    $('sheetLista').innerHTML = '<div class="status">Carregando...</div>';
+
+    if (!armazensCache) {
+        const d = await api('get_warehouses');
+        if (!d.result) {
+            $('sheetLista').innerHTML = '<div class="status">' + esc(d.error || 'Não foi possível carregar os locais.') + '</div>';
+            return;
+        }
+        armazensCache = d.result;
+    }
+    $('sheetLista').innerHTML = armazensCache.map(w => `
+        <button class="opt ${meuLocal && meuLocal.wh.id === w.id ? 'on' : ''}" onclick="escolherLocal(${w.id})">
+            <span>${esc(w.name)}</span><span>${meuLocal && meuLocal.wh.id === w.id ? '✓' : ''}</span>
+        </button>`).join('');
+}
+
+function fecharSeletorLocal() {
+    if ($('sheetBg').dataset.obrigatorio) return;   // na primeira vez é preciso escolher
+    $('sheetBg').classList.remove('show');
+    aoEscolherLocal = null;
+}
+
+function escolherLocal(id) {
+    const w = (armazensCache || []).find(x => x.id === id);
+    if (!w) return;
+    meuLocal = {
+        wh: { id: w.id, name: w.name },
+        loc: Array.isArray(w.lot_stock_id) ? { id: w.lot_stock_id[0], name: w.lot_stock_id[1] } : null
+    };
+    try { localStorage.setItem('deuris_meu_local', JSON.stringify(meuLocal)); } catch (e) {}
+    atualizarRotuloLocal();
+    $('sheetBg').dataset.obrigatorio = '';
+    $('sheetBg').classList.remove('show');
+    toast('Seu local: ' + w.name, 'ok');
+
+    const cb = aoEscolherLocal; aoEscolherLocal = null;
+    if (cb) cb();
+    else if (pilha[pilha.length - 1] === 'novaVenda' && venda) carregarProdutosDoLocal();   // trocou o local no meio da venda
+}
+
 /* ============ Navegação ============ */
-const TITULOS = { home: 'Deuris Candy 2', estoque: 'Estoque', vendas: 'Vendas', novaVenda: 'Nova venda', saldos: 'Saldos', transfContas: 'Transferir entre contas' };
+const TITULOS = { home: '', estoque: 'Estoque', vendas: 'Vendas', novaVenda: 'Nova venda' };
 let pilha = ['home'];
 
 function ir(tela) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     $(tela).classList.add('active');
+    const home = tela === 'home';
     $('titulo').textContent = TITULOS[tela];
-    $('btnBack').classList.toggle('show', tela !== 'home');
+    $('titulo').style.display = home ? 'none' : 'block';
+    $('btnLocal').style.display = home ? 'flex' : 'none';
+    $('chipLocal').style.display = home ? 'none' : 'inline-block';
+    $('btnBack').classList.toggle('show', !home);
+    $('fab').classList.toggle('show', ['home', 'estoque', 'vendas'].includes(tela));
     window.scrollTo(0, 0);
 }
 function abrir(tela) { pilha.push(tela); ir(tela); }
@@ -351,21 +425,17 @@ async function carregarVendas() {
 let venda = null;      // { partner, warehouse, produtos[], linhas[] }
 let nvBuscaReq = 0;
 
-async function abrirNovaVenda() {
-    venda = { partner: null, warehouse: '', produtos: [], linhas: [] };
+function abrirNovaVenda() {
+    exigirLocal(iniciarNovaVenda);
+}
+
+async function iniciarNovaVenda() {
+    venda = { partner: null, warehouse: String(meuLocal.wh.id), produtos: [], linhas: [] };
     renderCliente();
     renderLinhas();
-    $('nvProduto').innerHTML = '<option value="">Escolha o armazém primeiro</option>';
-    $('nvProduto').disabled = true;
-    $('nvArmazem').innerHTML = '<option value="">Carregando...</option>';
-    // evita empilhar a tela duas vezes se já estiver nela (ex.: botão dentro de Vendas)
+    // evita empilhar a tela duas vezes se já estiver nela
     if (pilha[pilha.length - 1] !== 'novaVenda') abrir('novaVenda');
-
-    const d = await api('get_warehouses');
-    if (!d.result) toast(d.error || 'Não foi possível carregar os armazéns.', 'err');
-    const lista = d.result || [];
-    $('nvArmazem').innerHTML = '<option value="">Selecione...</option>' + lista.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('');
-    if (lista.length === 1) { $('nvArmazem').value = lista[0].id; trocarArmazem(); }
+    carregarProdutosDoLocal();
 }
 
 function renderCliente() {
@@ -399,24 +469,23 @@ async function criarCliente() {
     else toast(d.error || 'Não foi possível criar o cliente.', 'err');
 }
 
-async function trocarArmazem() {
-    const wh = $('nvArmazem').value;
-    venda.warehouse = wh;
+async function carregarProdutosDoLocal() {
+    $('nvLocalNome').textContent = meuLocal.wh.name;
+    venda.warehouse = String(meuLocal.wh.id);
     const sel = $('nvProduto');
-    if (!wh) { sel.innerHTML = '<option value="">Escolha o armazém primeiro</option>'; sel.disabled = true; venda.produtos = []; return; }
     sel.disabled = true;
     sel.innerHTML = '<option value="">Carregando produtos...</option>';
-    const d = await api('get_warehouse_products', { warehouse_id: Number(wh) });
+    const d = await api('get_warehouse_products', { warehouse_id: meuLocal.wh.id });
     if (!d.products) { sel.innerHTML = '<option value="">Erro ao carregar</option>'; toast(d.error || 'Erro ao carregar produtos.', 'err'); return; }
     venda.produtos = d.products;
-    sel.innerHTML = '<option value="">' + (d.products.length ? 'Escolha um produto...' : 'Sem estoque neste armazém') + '</option>' +
+    sel.innerHTML = '<option value="">' + (d.products.length ? 'Escolha um produto...' : 'Sem estoque neste local') + '</option>' +
         d.products.map(p => `<option value="${p.id}">${esc(p.display_name)} (${p.stock_qty} un) - ${brl(p.list_price)}</option>`).join('');
     sel.disabled = d.products.length === 0;
 
-    // remove das linhas os produtos que não existem neste armazém
+    // remove das linhas os produtos que não existem neste local
     const antes = venda.linhas.length;
     venda.linhas = venda.linhas.filter(l => d.products.some(p => p.id === l.id));
-    if (venda.linhas.length < antes) toast('Itens sem estoque neste armazém foram removidos.', 'err');
+    if (venda.linhas.length < antes) toast('Itens sem estoque neste local foram removidos.', 'err');
     renderLinhas();
 }
 
@@ -466,7 +535,7 @@ function renderLinhas() {
 
 async function salvarVenda(confirmar) {
     if (!venda.partner) return toast('Selecione um cliente.', 'err');
-    if (!venda.warehouse) return toast('Selecione o armazém.', 'err');
+    if (!meuLocal) return toast('Escolha o seu local.', 'err');
     if (venda.linhas.length === 0) return toast('Adicione ao menos um produto.', 'err');
 
     const btnA = $('btnConfirmarVenda'), btnB = $('btnOrcamento');
@@ -476,7 +545,7 @@ async function salvarVenda(confirmar) {
 
     const d = await api('save_sale_order', {
         partner_id: venda.partner.id,
-        warehouse_id: Number(venda.warehouse),
+        warehouse_id: meuLocal.wh.id,
         lines: venda.linhas.map(l => ({ product_id: l.id, qty: l.qty, price: l.price })),
         confirm: confirmar
     });
@@ -497,65 +566,10 @@ async function salvarVenda(confirmar) {
     }
 }
 
-/* ============ Saldos ============ */
-async function abrirSaldos() {
-    $('salStatus').textContent = 'Carregando...';
-    $('salLista').innerHTML = '';
-    abrir('saldos');
-    const d = await api('get_financial_accounts', { query: '' });
-    if (!d.result) { $('salStatus').textContent = d.error || 'Erro ao carregar saldos.'; return; }
-    if (d.result.length === 0) { $('salStatus').textContent = 'Nenhuma conta com saldo.'; return; }
-    $('salStatus').textContent = d.result.length + ' conta(s)';
-    const cls = n => (n < 0 ? 'neg' : 'pos');
-    const total = d.result.reduce((s, a) => s + Math.round((a.balance || 0) * 100), 0) / 100;
-    $('salLista').innerHTML = d.result.map(a => `
-        <div class="card row">
-            <div><div class="t">${esc(a.name)}</div><div class="s">${esc(a.code)}</div></div>
-            <div class="money ${cls(a.balance || 0)}">${brl(a.balance || 0)}</div>
-        </div>`).join('') +
-        `<div class="card total-card row"><div class="t">TOTAL</div><div class="money ${cls(total)}">${brl(total)}</div></div>`;
-}
 
-/* ============ Transferência entre contas ============ */
-let tcDataIso = '';
-
-async function abrirTransfContas() {
-    const h = new Date(), p = n => String(n).padStart(2, '0');
-    tcDataIso = `${h.getFullYear()}-${p(h.getMonth() + 1)}-${p(h.getDate())}`;
-    $('tcData').value = `${p(h.getDate())}/${p(h.getMonth() + 1)}/${h.getFullYear()}`;
-    $('tcDiario').value = 'Transferências';
-    $('tcValor').value = '';
-    $('tcDe').innerHTML = $('tcPara').innerHTML = '<option value="">Carregando...</option>';
-    abrir('transfContas');
-
-    const d = await api('get_account_transfer_setup');
-    if (!d.accounts) { toast(d.error || 'Não foi possível carregar as contas.', 'err'); return; }
-    if (!d.journal) { toast('Diário "Transferências" não encontrado no Odoo.', 'err'); return; }
-    $('tcDiario').value = d.journal.name;
-    const ops = d.accounts.map(a => `<option value="${a.id}">${esc((a.code ? a.code + ' ' : '') + a.name)}</option>`).join('');
-    $('tcDe').innerHTML = '<option value="">Selecione a conta de origem...</option>' + ops;
-    $('tcPara').innerHTML = '<option value="">Selecione a conta de destino...</option>' + ops;
-}
-
-async function lancarTransfContas() {
-    const de = $('tcDe').value, para = $('tcPara').value, valor = parseFloat($('tcValor').value);
-    if (!de || !para) return toast('Selecione a conta de origem e a de destino.', 'err');
-    if (de === para) return toast('A origem e o destino devem ser diferentes.', 'err');
-    if (!(valor > 0)) return toast('Informe um valor maior que zero.', 'err');
-
-    const btn = $('btnLancarTc');
-    btn.disabled = true; btn.textContent = 'Lançando...';
-    const d = await api('create_account_transfer', { from_account_id: de, to_account_id: para, amount: valor, date: tcDataIso });
-    btn.disabled = false; btn.textContent = 'Lançar';
-
-    if (d.success) {
-        toast(('Transferência ' + (d.name || '') + ' lançada!').replace('  ', ' '), 'ok');
-        pilha = ['home'];
-        ir('home');
-    } else {
-        toast(d.error || 'Erro ao lançar a transferência.', 'err');
-    }
-}
+atualizarRotuloLocal();
+ir('home');
+if (!meuLocal) abrirSeletorLocal(true, null);
 </script>
 </body>
 </html>
