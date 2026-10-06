@@ -522,7 +522,8 @@ export default async function handler(req, res) {
                 headerData.order_line = validLines.map(l => [0, 0, {
                     product_id: Number(l.product_id),
                     product_uom_qty: Number(l.qty),
-                    price_unit: Number(l.price)
+                    price_unit: Number(l.price),
+                    discount: Number(l.discount) || 0
                 }]);
                 orderId = await execute("sale.order", "create", [headerData]);
             } else {
@@ -537,6 +538,7 @@ export default async function handler(req, res) {
                         product_uom_qty: Number(l.qty),
                         price_unit: Number(l.price)
                     };
+                    if (l.discount !== undefined) lineVals.discount = Number(l.discount) || 0;
                     lineCommands.push(l.id ? [1, Number(l.id), lineVals] : [0, 0, lineVals]);
                 }
                 if (lineCommands.length > 0) headerData.order_line = lineCommands;
