@@ -98,6 +98,25 @@ input[disabled] { background: #f0f0f0; color: #555; }
 .warn-txt { color: var(--danger); font-size: 12px; margin-top: 6px; font-weight: 600; }
 .sum { display: flex; justify-content: space-between; font-size: 20px; font-weight: 800; margin-top: 16px; color: var(--primary); }
 
+
+/* Seletor de produto (2 colunas) */
+.pick-btn { width: 100%; text-align: left; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: #fff; font-size: 16px; color: #333; cursor: pointer; position: relative; }
+.pick-btn::after { content: '▾'; position: absolute; right: 14px; top: 50%; transform: translateY(-50%); color: #666; }
+.pick-btn[disabled] { background: #f0f0f0; color: #777; }
+.prod-list { display: none; border: 1px solid var(--primary); border-radius: 12px; margin-top: 6px; background: #fff; overflow: hidden; }
+.prod-list.show { display: block; }
+.prod-list input { border: none; border-bottom: 1px solid var(--border); border-radius: 0; }
+.prod-head, .prod-item { display: grid; grid-template-columns: 1fr 74px; gap: 10px; align-items: center; padding: 10px 14px; }
+.prod-head { background: #f4eef2; font-size: 12px; font-weight: 700; color: var(--primary); text-transform: uppercase; }
+.prod-head span:last-child, .prod-item span:last-child { text-align: center; }
+.prod-body { max-height: 45vh; overflow-y: auto; }
+.prod-item { width: 100%; border: none; border-bottom: 1px solid var(--border); background: #fff; font-size: 15px; text-align: left; cursor: pointer; }
+.prod-item:last-child { border-bottom: none; }
+.prod-item:active { background: #f4eef2; }
+.prod-item .q { font-weight: 800; }
+.prod-item .q.zero { color: var(--danger); }
+.prod-vazio { padding: 14px; text-align: center; color: #666; font-size: 14px; }
+
 /* Botão de local (cabeçalho) */
 .btn-local { flex: 1; display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,.18); color: #fff; border: none; border-radius: 12px; padding: 11px 14px; font-size: 17px; font-weight: 700; cursor: pointer; text-align: left; min-width: 0; }
 .btn-local span.nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -175,13 +194,16 @@ input[disabled] { background: #f0f0f0; color: #555; }
     <label class="f" style="margin-top:0">Cliente *</label>
     <div id="nvClienteBox"></div>
 
-    <label class="f">Saída do estoque</label>
-    <div class="picked"><span id="nvLocalNome">-</span><button onclick="abrirSeletorLocal()">trocar</button></div>
+    <label class="f" for="nvData">Data da venda</label>
+    <input type="datetime-local" id="nvData" onchange="venda.data = this.value">
 
     <label class="f">Adicionar produto</label>
-    <select id="nvProduto" onchange="adicionarProduto(this.value); this.value='';" disabled>
-        <option value="">Carregando produtos...</option>
-    </select>
+    <button type="button" class="pick-btn" id="nvProdBtn" onclick="abrirListaProdutos()" disabled>Carregando produtos...</button>
+    <div class="prod-list" id="nvProdList">
+        <input type="text" id="nvProdBusca" placeholder="Filtrar produto..." oninput="renderListaProdutos()" autocomplete="off">
+        <div class="prod-head"><span>Produto</span><span>Estoque</span></div>
+        <div class="prod-body" id="nvProdBody"></div>
+    </div>
 
     <div id="nvLinhas"></div>
 
@@ -439,12 +461,19 @@ async function carregarVendas() {
 let venda = null;      // { partner, warehouse, produtos[], linhas[] }
 let nvBuscaReq = 0;
 
+function dataLocalAgora() {
+    const d = new Date(), p = n => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
 function abrirNovaVenda() {
     exigirLocal(iniciarNovaVenda);
 }
 
 async function iniciarNovaVenda() {
-    venda = { partner: null, warehouse: String(meuLocal.wh.id), produtos: [], linhas: [] };
+    venda = { partner: null, warehouse: String(meuLocal.wh.id), produtos: [], linhas: [], data: dataLocalAgora() };
+    $('nvData').value = venda.data;
+    fecharListaProdutos();
     renderCliente();
     renderLinhas();
     // evita empilhar a tela duas vezes se já estiver nela
@@ -484,17 +513,16 @@ async function criarCliente() {
 }
 
 async function carregarProdutosDoLocal() {
-    $('nvLocalNome').textContent = meuLocal.wh.name;
     venda.warehouse = String(meuLocal.wh.id);
-    const sel = $('nvProduto');
-    sel.disabled = true;
-    sel.innerHTML = '<option value="">Carregando produtos...</option>';
+    const btn = $('nvProdBtn');
+    btn.disabled = true;
+    btn.textContent = 'Carregando produtos...';
     const d = await api('get_warehouse_products', { warehouse_id: meuLocal.wh.id });
-    if (!d.products) { sel.innerHTML = '<option value="">Erro ao carregar</option>'; toast(d.error || 'Erro ao carregar produtos.', 'err'); return; }
+    if (!d.products) { btn.textContent = 'Erro ao carregar'; toast(d.error || 'Erro ao carregar produtos.', 'err'); return; }
     venda.produtos = d.products;
-    sel.innerHTML = '<option value="">' + (d.products.length ? 'Escolha um produto...' : 'Sem estoque neste local') + '</option>' +
-        d.products.map(p => `<option value="${p.id}">${esc(p.display_name)} (${p.stock_qty} un) - ${brl(p.list_price)}</option>`).join('');
-    sel.disabled = d.products.length === 0;
+    btn.textContent = d.products.length ? 'Escolha um produto...' : 'Sem estoque neste local';
+    btn.disabled = d.products.length === 0;
+    renderListaProdutos();
 
     // remove das linhas os produtos que não existem neste local
     const antes = venda.linhas.length;
@@ -502,6 +530,24 @@ async function carregarProdutosDoLocal() {
     if (venda.linhas.length < antes) toast('Itens sem estoque neste local foram removidos.', 'err');
     renderLinhas();
 }
+
+function abrirListaProdutos() {
+    const l = $('nvProdList');
+    if (l.classList.contains('show')) return fecharListaProdutos();
+    $('nvProdBusca').value = '';
+    renderListaProdutos();
+    l.classList.add('show');
+}
+function fecharListaProdutos() { $('nvProdList').classList.remove('show'); }
+
+function renderListaProdutos() {
+    const q = ($('nvProdBusca').value || '').trim().toLowerCase();
+    const itens = (venda.produtos || []).filter(p => p.display_name.toLowerCase().includes(q));
+    $('nvProdBody').innerHTML = itens.length
+        ? itens.map(p => `<button type="button" class="prod-item" onclick="escolherProduto(${p.id})"><span>${esc(p.display_name)}</span><span class="q${p.stock_qty <= 0 ? ' zero' : ''}">${p.stock_qty}</span></button>`).join('')
+        : '<div class="prod-vazio">Nenhum produto encontrado</div>';
+}
+function escolherProduto(id) { fecharListaProdutos(); adicionarProduto(id); }
 
 function adicionarProduto(id) {
     if (!id) return;
@@ -551,6 +597,7 @@ async function salvarVenda(confirmar) {
     if (!venda.partner) return toast('Selecione um cliente.', 'err');
     if (!meuLocal) return toast('Escolha o seu local.', 'err');
     if (venda.linhas.length === 0) return toast('Adicione ao menos um produto.', 'err');
+    if (!venda.data) return toast('Informe a data da venda.', 'err');
 
     const btnA = $('btnConfirmarVenda'), btnB = $('btnOrcamento');
     const txtA = btnA.textContent, txtB = btnB.textContent;
@@ -561,6 +608,7 @@ async function salvarVenda(confirmar) {
         partner_id: venda.partner.id,
         warehouse_id: meuLocal.wh.id,
         lines: venda.linhas.map(l => ({ product_id: l.id, qty: l.qty, price: l.price })),
+        date_order: venda.data ? new Date(venda.data).toISOString() : null,
         confirm: confirmar
     });
 
