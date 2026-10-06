@@ -137,7 +137,7 @@ input[disabled] { background: #f0f0f0; color: #555; }
 
 
 /* Data compacta e desconto por item */
-.in-data { width: auto; max-width: 225px; padding: 8px 10px; font-size: 14px; border-radius: 10px; }
+.in-data { width: auto; max-width: 170px; padding: 8px 10px; font-size: 14px; border-radius: 10px; }
 .line .sub { text-align: right; font-weight: 800; font-size: 15px; margin-left: auto; line-height: 1.15; }
 .line .sub small { display: inline; margin-right: 6px; font-weight: 600; font-size: 12px; color: #888; text-decoration: line-through; }
 .line .desc { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
@@ -152,19 +152,24 @@ input[disabled] { background: #f0f0f0; color: #555; }
 /* Item da venda (layout: nome / Qtd + Desconto / subtotal + remover) */
 .line { background: #f8f9fb; padding: 14px; }
 .line .pname { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 14px; font-weight: 700; font-size: 15px; margin-bottom: 12px; }
-.line .cols { display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: end; }
+.line .cols { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: end; }
 .line .col label { display: block; font-size: 12px; font-weight: 700; color: #555; margin-bottom: 5px; }
-.line .stepper { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 4px; gap: 4px; }
-.line .stepper button { width: 40px; height: 40px; border: none; border-radius: 9px; background: #f1f1f4; }
+.line .stepper { justify-content: space-between; background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 4px; gap: 4px; }
+.line .stepper button { width: 48px; height: 44px; border: none; border-radius: 9px; background: #f1f1f4; }
 .line .stepper span { min-width: 34px; font-size: 18px; }
 .line .dsc { display: flex; gap: 8px; }
-.line .dsc input { flex: 1; min-width: 0; text-align: center; padding: 12px 8px; font-size: 16px; border-radius: 12px; }
-.line .dsc select { width: auto; flex: none; padding: 12px 8px; font-size: 15px; font-weight: 700; border-radius: 12px; }
+.line .dsc input { width: 64px; flex: none; min-width: 0; text-align: center; padding: 12px 8px; font-size: 16px; border-radius: 12px; }
+.line .dsc select { width: 62px; flex: none; padding: 12px 4px; font-size: 15px; font-weight: 700; border-radius: 12px; }
 .line .foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 12px; }
 .line .foot .sub { margin-left: 0; font-size: 17px; }
 .line .foot .eq { font-size: 12px; color: var(--muted); margin-right: auto; }
 .line .rm { width: 42px; height: 42px; border-radius: 50%; border: none; background: #fde2e4; color: var(--danger); font-size: 22px; cursor: pointer; line-height: 1; flex: none; }
 .line .rm:active { background: #f9c6ca; }
+
+
+.btn-add { display: block; width: 100%; margin-top: 12px; padding: 14px; border: 1px solid #b98fb0; border-radius: 12px; background: #f1e6ef; color: var(--primary); font-size: 16px; font-weight: 700; cursor: pointer; }
+.btn-add:active { background: #e6d3e2; }
+.btn-add[disabled] { opacity: .6; }
 
 /* Pop-up de pagamento */
 .modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 45; align-items: center; justify-content: center; padding: 16px; }
@@ -235,22 +240,21 @@ input[disabled] { background: #f0f0f0; color: #555; }
     <div id="nvClienteBox"></div>
 
     <label class="f" for="nvData">Data da venda</label>
-    <input type="datetime-local" id="nvData" class="in-data" onchange="venda.data = this.value">
+    <input type="date" id="nvData" class="in-data" onchange="venda.data = this.value">
 
-    <label class="f">Adicionar produto</label>
-    <button type="button" class="pick-btn" id="nvProdBtn" onclick="abrirListaProdutos()" disabled>Carregando produtos...</button>
+    <div id="nvLinhas"></div>
+
+    <button type="button" class="btn-add" id="nvProdBtn" onclick="abrirListaProdutos()" disabled>Carregando produtos...</button>
     <div class="prod-list" id="nvProdList">
         <input type="text" id="nvProdBusca" placeholder="Filtrar produto..." oninput="renderListaProdutos()" autocomplete="off">
         <div class="prod-head"><span>Produto</span><span>Estoque</span></div>
         <div class="prod-body" id="nvProdBody"></div>
     </div>
 
-    <div id="nvLinhas"></div>
-
     <div class="sum"><span>Total</span><span id="nvTotal">R$ 0,00</span></div>
 
-    <button class="btn" id="btnConfirmarVenda" onclick="salvarVenda(true)">Confirmar e Lançar Venda</button>
-    <button class="btn sec" id="btnOrcamento" onclick="salvarVenda(false)">Salvar Orçamento</button>
+    <button class="btn" id="btnConfirmarVenda" onclick="salvarVenda(true)">Salvar</button>
+    <button class="btn sec" id="btnOrcamento" onclick="salvarVenda(false)">Salvar Rascunho</button>
 </section>
 
 </main>
@@ -523,12 +527,20 @@ function dataLocalAgora() {
     return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
 }
 
+// Data escolhida (só o dia) + hora atual, para o Odoo guardar a data/hora do pedido
+function dataVendaISO() {
+    if (!venda.data) return null;
+    const [y, m, d] = venda.data.split('-').map(Number);
+    const n = new Date();
+    return new Date(y, m - 1, d, n.getHours(), n.getMinutes()).toISOString();
+}
+
 function abrirNovaVenda() {
     exigirLocal(iniciarNovaVenda);
 }
 
 async function iniciarNovaVenda() {
-    venda = { partner: null, warehouse: String(meuLocal.wh.id), produtos: [], linhas: [], data: dataLocalAgora() };
+    venda = { partner: null, warehouse: String(meuLocal.wh.id), produtos: [], linhas: [], data: dataLocalAgora().slice(0, 10) };
     $('nvData').value = venda.data;
     fecharListaProdutos();
     renderCliente();
@@ -577,7 +589,7 @@ async function carregarProdutosDoLocal() {
     const d = await api('get_warehouse_products', { warehouse_id: meuLocal.wh.id });
     if (!d.products) { btn.textContent = 'Erro ao carregar'; toast(d.error || 'Erro ao carregar produtos.', 'err'); return; }
     venda.produtos = d.products;
-    btn.textContent = d.products.length ? 'Escolha um produto...' : 'Sem estoque neste local';
+    btn.textContent = d.products.length ? '＋ Adicionar produto' : 'Sem estoque neste local';
     btn.disabled = d.products.length === 0;
     renderListaProdutos();
 
@@ -767,7 +779,7 @@ async function salvarVenda(confirmar) {
         partner_id: venda.partner.id,
         warehouse_id: meuLocal.wh.id,
         lines: venda.linhas.map(l => ({ product_id: l.id, qty: l.qty, price: l.price, discount: Number(pctDesc(l).toFixed(4)) })),
-        date_order: venda.data ? new Date(venda.data).toISOString() : null,
+        date_order: dataVendaISO(),
         invoice_date: dataLocalAgora().slice(0, 10),
         confirm: confirmar
     });
@@ -777,7 +789,7 @@ async function salvarVenda(confirmar) {
 
     if (d.success) {
         const avisos = (d.warnings || []).join(' ');
-        toast(confirmar ? ('Venda lançada!' + (avisos ? ' ' + avisos : '')) : 'Orçamento salvo!', avisos ? 'err' : 'ok');
+        toast(confirmar ? ('Venda lançada!' + (avisos ? ' ' + avisos : '')) : 'Rascunho salvo!', avisos ? 'err' : 'ok');
         const total = venda.linhas.reduce((s, l) => s + totalLinha(l), 0);
         if (confirmar && d.invoice_id && d.invoice_posted) {
             // fatura já criada e lançada: abre direto o pagamento
