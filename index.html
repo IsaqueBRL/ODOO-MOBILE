@@ -542,6 +542,7 @@ async function garantirLocalDeEstoque() {
 }
 
 function abrirEstoque() {
+    estOrdem = 'desc';   // sempre abre do maior para o menor
     exigirLocal(async () => {
         $('estBusca').value = '';
         $('estLista').innerHTML = ''; $('estTabela').style.display = 'none';
@@ -577,7 +578,7 @@ async function buscarEstoque() {
     renderEstoque();
 }
 
-let estDados = [], estOrdem = null;   // estOrdem: null (nome), 'desc' ou 'asc' pela quantidade
+let estDados = [], estOrdem = 'desc';   // ordenação pela quantidade: 'desc' (maior→menor, padrão) ou 'asc'
 
 function alternarOrdemEstoque() {
     estOrdem = estOrdem === 'desc' ? 'asc' : 'desc';
@@ -586,9 +587,8 @@ function alternarOrdemEstoque() {
 
 function renderEstoque() {
     const itens = estDados.slice();
-    if (estOrdem) itens.sort((a, b) => estOrdem === 'desc' ? b.qtd - a.qtd : a.qtd - b.qtd);
-    else itens.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
-    $('estOrdem').querySelector('i').textContent = estOrdem === 'desc' ? '↓' : estOrdem === 'asc' ? '↑' : '⇅';
+    itens.sort((a, b) => (estOrdem === 'desc' ? b.qtd - a.qtd : a.qtd - b.qtd) || a.nome.localeCompare(b.nome, 'pt-BR'));
+    $('estOrdem').querySelector('i').textContent = estOrdem === 'desc' ? '↓' : '↑';
     $('estTabela').style.display = '';
     $('estLista').innerHTML = itens.map(i => `
         <div class="tab-row click" onclick="abrirAjuste(${i.id})">
