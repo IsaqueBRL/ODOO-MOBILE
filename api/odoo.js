@@ -718,7 +718,8 @@ export default async function handler(req, res) {
             const query = body.query || "";
             // Somente "Locais internos" (igual ao filtro do Odoo); local opcional (inclui sublocais)
             const locationId = Number(body.location_id) || 0;
-            const domain = [["quantity", ">", 0], ["location_id.usage", "=", "internal"]];
+            // somente produtos com "Vendas" marcado e tipo "Mercadorias"
+            const domain = [["quantity", ">", 0], ["location_id.usage", "=", "internal"], ["product_id.sale_ok", "=", true], ["product_id.type", "=", "consu"]];
             if (locationId) domain.push(["location_id", "child_of", locationId]);
             if (query) domain.push(["product_id.name", "ilike", query]);
 
