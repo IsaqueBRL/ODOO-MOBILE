@@ -191,6 +191,24 @@ input[disabled] { background: #f0f0f0; color: #555; }
 
 .btn-add.btn-sm { display: inline-block; width: auto; margin: 0 0 8px; padding: 8px 16px; font-size: 14px; border-radius: 10px; }
 
+
+/* Transferências */
+.form-card { background: #fff; border: 1px solid var(--border); border-radius: 16px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.04); }
+.form-title { font-size: 16px; color: #222; border-left: 4px solid var(--primary); padding-left: 10px; margin-bottom: 4px; }
+.form-card .seta { text-align: center; color: #888; font-size: 18px; margin: 10px 0 4px; }
+.tr-box { background: #f8f9fb; border: 1px solid var(--border); border-radius: 14px; padding: 12px; }
+.tr-item { margin-bottom: 14px; }
+.tr-item:last-child { margin-bottom: 4px; }
+.tr-pick { width: 100%; text-align: left; background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 14px; font-size: 16px; color: #333; cursor: pointer; position: relative; padding-right: 30px; }
+.tr-pick.vazio { color: #888; }
+.tr-pick::after { content: '▾'; position: absolute; right: 14px; top: 50%; transform: translateY(-50%); color: #666; }
+.tr-item .lbl { display: block; font-size: 12px; font-weight: 700; color: #555; margin: 10px 0 5px; }
+.tr-item .linha { display: flex; gap: 10px; align-items: center; }
+.tr-item .linha input { flex: 1; text-align: center; font-size: 18px; font-weight: 700; padding: 12px; }
+.tr-item .rm { width: 42px; height: 42px; border-radius: 50%; border: none; background: #fde2e4; color: var(--danger); font-size: 22px; cursor: pointer; line-height: 1; flex: none; }
+.btn.ok-btn { background: var(--ok); margin-top: 14px; }
+.btn.ok-btn:active { background: #1b5e20; }
+
 /* Pop-up de pagamento */
 .modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 45; align-items: center; justify-content: center; padding: 16px; }
 .modal-bg.show { display: flex; }
@@ -231,6 +249,27 @@ input[disabled] { background: #f0f0f0; color: #555; }
     <div class="grid">
         <div class="tile" onclick="abrirEstoque()"><span class="ico">📦</span>Estoque</div>
         <div class="tile" onclick="abrirVendas()"><span class="ico">🧾</span>Vendas</div>
+        <div class="tile" onclick="abrirTransferencias()"><span class="ico">🔁</span>Transferências</div>
+    </div>
+</section>
+
+<!-- TRANSFERÊNCIAS -->
+<section class="screen" id="transfer">
+    <div class="form-card">
+        <h2 class="form-title">Nova Transferência</h2>
+        <label class="f">Local de Origem</label>
+        <select id="trOrigem" onchange="mudarOrigemTransf()"></select>
+        <div class="seta">⬇</div>
+        <label class="f" style="margin-top:0">Local de Destino</label>
+        <select id="trDestino" onchange="trf.destino = this.value"></select>
+
+        <label class="f" style="margin-top:18px">Produtos a Transferir</label>
+        <div class="tr-box">
+            <div id="trLinhas"></div>
+            <div class="status" id="trStatus"></div>
+        </div>
+        <button type="button" class="btn-add" onclick="adicionarLinhaTransf()">＋ Adicionar produto</button>
+        <button type="button" class="btn ok-btn" id="trSalvar" onclick="salvarTransferencia()">🔁 Transferir Estoque</button>
     </div>
 </section>
 
@@ -336,6 +375,19 @@ input[disabled] { background: #f0f0f0; color: #555; }
         <div class="prod-body" id="addLista" style="max-height:50vh"></div>
         <div class="acoes" style="margin:0;padding:12px 16px;border-top:1px solid var(--border)">
             <button class="btn grey" onclick="fecharAdicionar()">Fechar</button>
+        </div>
+    </div>
+</div>
+
+<!-- Escolher produto da transferência -->
+<div class="modal-bg" id="trpBg">
+    <div class="modal" style="padding:18px 0 0">
+        <h2 style="padding:0 20px">Escolher produto</h2>
+        <div style="padding:8px 16px 10px"><input type="text" id="trpBusca" placeholder="Filtrar produto..." oninput="renderPickTransf()" autocomplete="off"></div>
+        <div class="prod-head"><span>Produto</span><span>Estoque</span></div>
+        <div class="prod-body" id="trpLista" style="max-height:45vh"></div>
+        <div class="acoes" style="margin:0;padding:12px 16px;border-top:1px solid var(--border)">
+            <button class="btn grey" onclick="$('trpBg').classList.remove('show')">Fechar</button>
         </div>
     </div>
 </div>
@@ -450,7 +502,7 @@ function escolherLocal(id) {
 }
 
 /* ============ Navegação ============ */
-const TITULOS = { home: '', estoque: 'Estoque', vendas: 'Vendas', novaVenda: 'Nova venda' };
+const TITULOS = { home: '', estoque: 'Estoque', vendas: 'Vendas', novaVenda: 'Nova venda', transfer: 'Transferências' };
 let pilha = ['home'];
 
 function ir(tela) {
@@ -609,6 +661,139 @@ function escolherAdicionar(id) {
     if (!p) return;
     fecharAdicionar();
     abrirAjuste(id, p.display_name, 0);
+}
+
+
+/* ============ Transferências entre locais ============ */
+let trf = { origem: '', destino: '', produtos: [], linhas: [], pickUid: null };
+let trUid = 0;
+
+function abrirTransferencias() {
+    exigirLocal(async () => {
+        await garantirLocalDeEstoque();
+        if (!armazensCache) {
+            const d = await api('get_warehouses');
+            if (d.result) armazensCache = d.result;
+        }
+        const whs = (armazensCache || []).filter(w => Array.isArray(w.lot_stock_id));
+        if (whs.length === 0) return toast('Não foi possível carregar os locais.', 'err');
+        const origemPadrao = meuLocal && meuLocal.loc ? String(meuLocal.loc.id) : String(whs[0].lot_stock_id[0]);
+        $('trOrigem').innerHTML = whs.map(w => `<option value="${w.lot_stock_id[0]}">${esc(w.name)}</option>`).join('');
+        $('trDestino').innerHTML = '<option value="">Escolha o destino...</option>' + whs.map(w => `<option value="${w.lot_stock_id[0]}">${esc(w.name)}</option>`).join('');
+        $('trOrigem').value = origemPadrao;
+        trf = { origem: origemPadrao, destino: '', produtos: [], linhas: [], pickUid: null };
+        adicionarLinhaTransf();
+        abrir('transfer');
+        carregarProdutosTransf();
+    });
+}
+
+async function carregarProdutosTransf() {
+    $('trStatus').textContent = 'Carregando produtos do local...';
+    const origem = trf.origem;
+    const d = await api('get_location_products', { location_id: origem });
+    if (origem !== trf.origem) return;   // trocou a origem no meio do caminho
+    if (!d.products) { $('trStatus').textContent = d.error || 'Erro ao carregar produtos.'; return; }
+    trf.produtos = d.products;
+    // mantém só as seleções que ainda existem na nova origem
+    trf.linhas.forEach(l => {
+        if (!l.pid) return;
+        const p = trf.produtos.find(x => x.id === l.pid);
+        if (p) l.estoque = p.stock_qty; else { l.pid = null; l.nome = ''; l.estoque = 0; }
+    });
+    $('trStatus').textContent = d.products.length ? '' : 'Este local não tem produtos em estoque.';
+    renderLinhasTransf();
+}
+
+function mudarOrigemTransf() {
+    trf.origem = $('trOrigem').value;
+    trf.produtos = [];
+    trf.linhas.forEach(l => { l.pid = null; l.nome = ''; l.estoque = 0; });
+    renderLinhasTransf();
+    carregarProdutosTransf();
+}
+
+function adicionarLinhaTransf() {
+    trf.linhas.push({ uid: ++trUid, pid: null, nome: '', estoque: 0, qty: 1 });
+    renderLinhasTransf();
+}
+function removerLinhaTransf(uid) {
+    trf.linhas = trf.linhas.filter(l => l.uid !== uid);
+    if (trf.linhas.length === 0) adicionarLinhaTransf(); else renderLinhasTransf();
+}
+function mudarQtdTransf(uid, v) {
+    const l = trf.linhas.find(x => x.uid === uid);
+    if (!l) return;
+    l.qty = parseFloat(String(v).replace(',', '.')) || 0;
+    const w = document.getElementById('trw' + uid);
+    if (w) w.textContent = l.pid && l.qty > l.estoque ? 'Atenção: só há ' + fmtQtd(l.estoque) + ' un em estoque.' : '';
+}
+
+function renderLinhasTransf() {
+    $('trLinhas').innerHTML = trf.linhas.map(l => `
+        <div class="tr-item">
+            <button type="button" class="tr-pick${l.pid ? '' : ' vazio'}" onclick="abrirPickTransf(${l.uid})">${l.pid ? esc(l.nome) : 'Selecione o produto...'}</button>
+            <label class="lbl">Qtd.</label>
+            <div class="linha">
+                <input type="number" inputmode="decimal" min="0" step="any" value="${l.qty || ''}" oninput="mudarQtdTransf(${l.uid}, this.value)">
+                <button type="button" class="rm" onclick="removerLinhaTransf(${l.uid})" aria-label="Remover">×</button>
+            </div>
+            <div class="warn-txt" id="trw${l.uid}">${l.pid && l.qty > l.estoque ? 'Atenção: só há ' + fmtQtd(l.estoque) + ' un em estoque.' : ''}</div>
+        </div>`).join('');
+}
+
+function abrirPickTransf(uid) {
+    if (trf.produtos.length === 0) return toast('Este local não tem produtos em estoque.', 'err');
+    trf.pickUid = uid;
+    $('trpBusca').value = '';
+    renderPickTransf();
+    $('trpBg').classList.add('show');
+}
+function renderPickTransf() {
+    const q = ($('trpBusca').value || '').trim().toLowerCase();
+    const usados = new Set(trf.linhas.filter(l => l.uid !== trf.pickUid && l.pid).map(l => l.pid));   // sem duplicar produto
+    const itens = trf.produtos.filter(p => !usados.has(p.id) && p.display_name.toLowerCase().includes(q));
+    $('trpLista').innerHTML = itens.length
+        ? itens.map(p => `<button type="button" class="prod-item" onclick="escolherProdTransf(${p.id})"><span>${esc(p.display_name)}</span><span class="q">${fmtQtd(p.stock_qty)}</span></button>`).join('')
+        : '<div class="prod-vazio">Nenhum produto encontrado</div>';
+}
+function escolherProdTransf(pid) {
+    const l = trf.linhas.find(x => x.uid === trf.pickUid);
+    const p = trf.produtos.find(x => x.id === pid);
+    if (!l || !p) return;
+    l.pid = p.id; l.nome = p.display_name; l.estoque = p.stock_qty;
+    if (!l.qty) l.qty = 1;
+    $('trpBg').classList.remove('show');
+    renderLinhasTransf();
+}
+
+async function salvarTransferencia() {
+    if (!trf.destino) return toast('Escolha o local de destino.', 'err');
+    if (trf.destino === trf.origem) return toast('A origem e o destino devem ser diferentes.', 'err');
+    const linhas = trf.linhas.filter(l => l.pid);
+    if (linhas.length === 0) return toast('Selecione ao menos um produto.', 'err');
+    for (const l of linhas) {
+        if (!(l.qty > 0)) return toast('Informe a quantidade de ' + l.nome + '.', 'err');
+        if (l.qty > l.estoque) return toast(l.nome + ': só há ' + fmtQtd(l.estoque) + ' un em estoque.', 'err');
+    }
+    const btn = $('trSalvar');
+    btn.disabled = true;
+    btn.textContent = 'Transferindo...';
+    const d = await api('quick_transfer', {
+        location_id: Number(trf.origem),
+        location_dest_id: Number(trf.destino),
+        lines: linhas.map(l => ({ product_id: l.pid, qty: l.qty }))
+    });
+    btn.disabled = false;
+    btn.textContent = '🔁 Transferir Estoque';
+    if (d.success) {
+        toast('Transferência concluída!', 'ok');
+        trf.linhas = [];
+        adicionarLinhaTransf();
+        carregarProdutosTransf();   // saldos atualizados
+    } else {
+        toast(d.error || 'Erro ao transferir.', 'err');
+    }
 }
 
 /* ============ Vendas (só carrega depois de escolher um filtro) ============ */
