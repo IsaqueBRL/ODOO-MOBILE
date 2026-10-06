@@ -1032,6 +1032,73 @@ export default async function handler(req, res) {
             return res.status(200).json({ success: true, id: newPickingId });
         }
 
+        // AÇÃO: TRANSFERÊNCIA RÁPIDA (app mobile): cria, confirma e valida a transferência interna de uma vez
+        if (action === "quick_transfer") {
+            const srcId = Number(body.location_id) || 0;
+            const dstId = Number(body.location_dest_id) || 0;
+            const items = (body.lines || []).map(l => ({ product_id: Number(l.product_id), qty: Number(l.qty) }));
+            if (!srcId || !dstId) return res.status(400).json({ error: "Escolha o local de origem e o de destino." });
+            if (srcId === dstId) return res.status(400).json({ error: "A origem e o destino devem ser diferentes." });
+            if (items.length === 0) return res.status(400).json({ error: "Adicione ao menos um produto." });
+            if (items.some(l => !l.product_id || !(l.qty > 0))) return res.status(400).json({ error: "A quantidade de cada produto deve ser maior que zero." });
+            if (new Set(items.map(l => l.product_id)).size !== items.length) return res.status(400).json({ error: "Há produtos repetidos na transferência." });
+
+            // confere o saldo de cada produto na origem
+            const quants = await execute("stock.quant", "search_read", [[
+                ["location_id", "child_of", srcId],
+                ["location_id.usage", "=", "internal"],
+                ["product_id", "in", items.map(l => l.product_id)]
+            ]], { fields: ["product_id", "quantity"], limit: 10000 });
+            const saldo = {};
+            (quants || []).forEach(q => { if (Array.isArray(q.product_id)) saldo[q.product_id[0]] = (saldo[q.product_id[0]] || 0) + q.quantity; });
+            for (const l of items) {
+                if ((saldo[l.product_id] || 0) + 1e-9 < l.qty) {
+                    return res.status(400).json({ error: "Quantidade maior que o estoque disponível na origem (disponível: " + (saldo[l.product_id] || 0) + ")." });
+                }
+            }
+
+            const type = await resolveInternalPickingType(srcId);
+            if (!type) return res.status(400).json({ error: "Nenhum tipo de operação de Transferência Interna encontrado no Odoo." });
+
+            const moveCmds = [];
+            for (const l of items) {
+                moveCmds.push([0, 0, await onlyExistingFields("stock.move", {
+                    product_id: l.product_id,
+                    product_uom_qty: l.qty,
+                    location_id: srcId,
+                    location_dest_id: dstId
+                })]);
+            }
+            const pickingId = await execute("stock.picking", "create", [{
+                picking_type_id: type.id,
+                location_id: srcId,
+                location_dest_id: dstId,
+                move_ids: moveCmds
+            }]);
+
+            try {
+                await execute("stock.picking", "action_confirm", [[pickingId]]);
+                await execute("stock.picking", "action_assign", [[pickingId]]).catch(() => {});
+                const moves = await execute("stock.move", "search_read", [[["picking_id", "=", pickingId]]], { fields: ["id", "product_uom_qty"] });
+                for (const mv of (moves || [])) {
+                    try {
+                        await execute("stock.move", "write", [[mv.id], { quantity: mv.product_uom_qty }]);
+                    } catch (e2) {
+                        await execute("stock.move", "write", [[mv.id], { quantity_done: mv.product_uom_qty }]).catch(() => {});
+                    }
+                }
+                await execute("stock.picking", "button_validate", [[pickingId]], { context: { skip_immediate: true, skip_backorder: true, skip_sms: true } });
+            } catch (e) {
+                return res.status(500).json({ error: "A transferência #" + pickingId + " foi criada, mas não pôde ser concluída: " + e.message });
+            }
+
+            const p = await execute("stock.picking", "read", [[pickingId]], { fields: ["state", "name"] });
+            if (!p || !p[0] || p[0].state !== "done") {
+                return res.status(500).json({ error: "A transferência " + ((p && p[0] && p[0].name) || "#" + pickingId) + " foi criada, mas não foi concluída. Finalize-a no Odoo." });
+            }
+            return res.status(200).json({ success: true, id: pickingId, name: p[0].name });
+        }
+
         // AÇÃO: EXCLUIR TRANSFERÊNCIA (APENAS PERMITIDO EM RASCUNHO PELO PRÓPRIO ODOO)
         if (action === "delete_transfer") {
             const { order_id } = body;
