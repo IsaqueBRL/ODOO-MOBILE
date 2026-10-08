@@ -349,6 +349,148 @@ async function reduzirEntregaAntesDoPedido(orderId, reducoes, remocoes) {
     return avisos;
 }
 
+        // Devolve ao estoque de origem os itens de todas as entregas JÁ CONCLUÍDAS de um pedido
+        // (mesmo processo manual do Odoo: entrega > "Devolução" > criar devolução > "Validar" o recebimento).
+        // Só devolve o que ainda não foi devolvido, então chamar de novo não duplica a devolução.
+        const devolverEntregasDoPedido = async (orderId) => {
+            const oid = Number(orderId);
+            const devolvidos = [];
+            const avisos = [];
+
+            const pickings = await execute("stock.picking", "search_read", [[
+                ["sale_id", "=", oid], ["state", "=", "done"], ["picking_type_code", "=", "outgoing"]
+            ]], { fields: ["id", "name", "location_id", "location_dest_id", "picking_type_id", "partner_id"] });
+
+            for (const p of (pickings || [])) {
+                try {
+                    // 1) o que saiu nesta entrega
+                    let moves;
+                    try {
+                        moves = await execute("stock.move", "search_read", [[["picking_id", "=", p.id], ["state", "=", "done"]]], { fields: ["id", "quantity"] });
+                    } catch (e) {
+                        moves = await execute("stock.move", "search_read", [[["picking_id", "=", p.id], ["state", "=", "done"]]], { fields: ["id", "quantity_done"] });
+                        moves = moves.map(m => ({ id: m.id, quantity: m.quantity_done }));
+                    }
+                    const moveIds = (moves || []).map(m => m.id);
+                    if (moveIds.length === 0) continue;
+
+                    // 2) o que já foi devolvido antes (evita devolver duas vezes)
+                    const jaDevolvidos = await execute("stock.move", "search_read", [[["origin_returned_move_id", "in", moveIds], ["state", "!=", "cancel"]]], {
+                        fields: ["origin_returned_move_id", "product_uom_qty", "quantity", "state"]
+                    }).catch(() => []);
+                    const devolvidoPorMove = {};
+                    (jaDevolvidos || []).forEach(r => {
+                        const origem = Array.isArray(r.origin_returned_move_id) ? r.origin_returned_move_id[0] : r.origin_returned_move_id;
+                        const qtd = r.state === "done" ? (r.quantity || 0) : (r.product_uom_qty || 0);
+                        devolvidoPorMove[origem] = (devolvidoPorMove[origem] || 0) + qtd;
+                    });
+
+                    const restante = {};
+                    let temAlgoParaDevolver = false;
+                    moves.forEach(m => {
+                        restante[m.id] = Math.max(0, (m.quantity || 0) - (devolvidoPorMove[m.id] || 0));
+                        if (restante[m.id] > 0) temAlgoParaDevolver = true;
+                    });
+                    if (!temAlgoParaDevolver) continue;
+
+                    // 3) cria o recebimento de devolução (o que o botão "Devolução" faz no Odoo).
+                    // Nesta versão do Odoo o assistente "stock.return.picking" não existe mais:
+                    // o botão cria direto um recebimento em rascunho, e é isso que fazemos aqui,
+                    // já com a "Demanda" igual à quantidade que saiu no pedido.
+                    const origemId = Array.isArray(p.location_id) ? p.location_id[0] : p.location_id;      // estoque de onde saiu
+                    const clienteLocId = Array.isArray(p.location_dest_id) ? p.location_dest_id[0] : p.location_dest_id;
+                    const tipoOrigemId = Array.isArray(p.picking_type_id) ? p.picking_type_id[0] : p.picking_type_id;
+
+                    // tipo de operação de devolução ("Recebimentos") definido no tipo da entrega
+                    let tipoDevolucaoId = null;
+                    let armazemTipoId = null;
+                    try {
+                        const defsTipo = await onlyExistingFields("stock.picking.type", { return_picking_type_id: 1, warehouse_id: 1 });
+                        const camposTipo = Object.keys(defsTipo);
+                        if (camposTipo.length > 0) {
+                            const tp = await execute("stock.picking.type", "read", [[tipoOrigemId]], { fields: camposTipo });
+                            if (tp && tp[0] && Array.isArray(tp[0].return_picking_type_id)) tipoDevolucaoId = tp[0].return_picking_type_id[0];
+                            if (tp && tp[0] && Array.isArray(tp[0].warehouse_id)) armazemTipoId = tp[0].warehouse_id[0];
+                        }
+                    } catch (e) { /* tenta o plano B abaixo */ }
+                    if (!tipoDevolucaoId) {
+                        // plano B: tipo "Recebimentos" do mesmo armazém da entrega
+                        const dom = [["code", "=", "incoming"]];
+                        if (armazemTipoId) dom.push(["warehouse_id", "=", armazemTipoId]);
+                        const incoming = await execute("stock.picking.type", "search_read", [dom], { fields: ["id"], limit: 1 }).catch(() => []);
+                        if (incoming && incoming[0]) tipoDevolucaoId = incoming[0].id;
+                    }
+                    if (!tipoDevolucaoId) throw new Error("não foi encontrado o tipo de operação de devolução (Recebimentos) deste local");
+
+                    // linhas originais completas (para copiar produto e unidade de medida)
+                    const movesCompletos = await execute("stock.move", "read", [moveIds]);
+                    const moveCommands = [];
+                    for (const mv of movesCompletos) {
+                        const qtd = restante[mv.id] || 0;
+                        if (qtd <= 0) continue;
+                        const uom = Array.isArray(mv.product_uom) ? mv.product_uom[0] : (Array.isArray(mv.uom_id) ? mv.uom_id[0] : null);
+                        const vals = await onlyExistingFields("stock.move", {
+                            product_id: Array.isArray(mv.product_id) ? mv.product_id[0] : mv.product_id,
+                            product_uom_qty: qtd,
+                            product_uom: uom,
+                            uom_id: uom,
+                            location_id: clienteLocId,
+                            location_dest_id: origemId,
+                            origin_returned_move_id: mv.id,
+                            picking_type_id: tipoDevolucaoId,
+                            origin: "Devolução de " + p.name
+                        });
+                        moveCommands.push([0, 0, vals]);
+                    }
+
+                    const pickingVals = await onlyExistingFields("stock.picking", {
+                        picking_type_id: tipoDevolucaoId,
+                        partner_id: Array.isArray(p.partner_id) ? p.partner_id[0] : false,
+                        origin: "Devolução de " + p.name,
+                        location_id: clienteLocId,
+                        location_dest_id: origemId,
+                        return_id: p.id,
+                        move_ids: moveCommands
+                    });
+                    const novoId = await execute("stock.picking", "create", [pickingVals]);
+                    if (!novoId) throw new Error("o Odoo não criou o recebimento de devolução");
+
+                    // 4) validar o recebimento (botão "Validar" do Odoo), com a quantidade devolvida
+                    let info = await execute("stock.picking", "read", [[novoId]], { fields: ["name", "state"] });
+                    if (info[0].state === "draft") {
+                        await execute("stock.picking", "action_confirm", [[novoId]]);
+                    }
+                    const novosMoves = await execute("stock.move", "search_read", [[["picking_id", "=", novoId]]], { fields: ["id", "product_uom_qty"] });
+                    for (const mv of (novosMoves || [])) {
+                        try {
+                            await execute("stock.move", "write", [[mv.id], { quantity: mv.product_uom_qty }]);
+                        } catch (e2) {
+                            await execute("stock.move", "write", [[mv.id], { quantity_done: mv.product_uom_qty }]).catch(() => {});
+                        }
+                    }
+
+                    const vr = await execute("stock.picking", "button_validate", [[novoId]], { context: { skip_sms: true } });
+                    // se o Odoo abrir uma janela de confirmação (ex.: criar pendência), responde por ela
+                    if (vr && typeof vr === "object" && vr.res_model) {
+                        const wctx = Object.assign({}, vr.context || {}, { skip_sms: true });
+                        const wid2 = await execute(vr.res_model, "create", [{}], { context: wctx });
+                        const metodo = vr.res_model === "stock.backorder.confirmation" ? "process_cancel_backorder" : "process";
+                        await execute(vr.res_model, metodo, [[wid2]], { context: wctx });
+                    }
+
+                    info = await execute("stock.picking", "read", [[novoId]], { fields: ["name", "state"] });
+                    if (info[0].state === "done") {
+                        devolvidos.push(info[0].name);
+                    } else {
+                        avisos.push("A devolução " + info[0].name + " foi criada, mas não foi validada. Valide-a no Odoo para o item voltar ao estoque.");
+                    }
+                } catch (e) {
+                    avisos.push("Não foi possível devolver ao estoque a entrega " + p.name + ": " + e.message + " Faça a devolução manualmente no Odoo.");
+                }
+            }
+            return { devolvidos, avisos };
+        };
+
 export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -818,7 +960,18 @@ export default async function handler(req, res) {
                 }
                 throw e;
             }
-            return res.status(200).json({ success: true });
+
+            // Pedido cancelado: devolve ao estoque de origem o que já tinha sido entregue
+            let devolvidos = [];
+            let warnings = [];
+            try {
+                const r = await devolverEntregasDoPedido(oid);
+                devolvidos = r.devolvidos;
+                warnings = r.avisos;
+            } catch (e) {
+                warnings.push("Venda cancelada, mas não foi possível devolver o item ao estoque: " + e.message + " Faça a devolução manualmente no Odoo.");
+            }
+            return res.status(200).json({ success: true, devolvidos, warnings });
         }
 
         // AÇÃO: REABRIR PEDIDO CANCELADO/CONFIRMADO COMO ORÇAMENTO (EDITÁVEL)
@@ -1319,7 +1472,7 @@ export default async function handler(req, res) {
             const orders = await execute("sale.order", "search_read", [domain], {
                 fields: ["id", "name", "partner_id", "amount_total", "state", "invoice_status", "invoice_ids", "warehouse_id", "date_order"],
                 order: "id desc",
-                limit: 100
+                limit: Math.min(Math.max(parseInt(body.limit, 10) || 100, 1), 1000)
             });
 
             // Busca em lote o status de pagamento das faturas ligadas a cada pedido
@@ -1347,6 +1500,21 @@ export default async function handler(req, res) {
             return res.status(200).json({ result });
         }
 
+        // AÇÃO: RESUMO DO DIA (valor vendido e quantidade de vendas confirmadas no intervalo, do local informado)
+        if (action === "get_sales_summary") {
+            const toOdoo = (iso) => {
+                const d = new Date(iso);
+                return isNaN(d) ? null : d.toISOString().replace("T", " ").slice(0, 19);
+            };
+            const de = toOdoo(body.date_from), ate = toOdoo(body.date_to);
+            if (!de || !ate) return res.status(400).json({ error: "Período inválido." });
+            const domain = [["state", "in", ["sale", "done"]], ["date_order", ">=", de], ["date_order", "<", ate]];
+            if (body.warehouse_id) domain.push(["warehouse_id", "=", parseInt(body.warehouse_id, 10)]);
+            const pedidos = await execute("sale.order", "search_read", [domain], { fields: ["amount_total"], limit: 2000 });
+            const total = (pedidos || []).reduce((s, o) => s + (Number(o.amount_total) || 0), 0);
+            return res.status(200).json({ total: Math.round(total * 100) / 100, count: (pedidos || []).length });
+        }
+
         // AÇÃO: DETALHES DE UM PEDIDO DE VENDA
         if (action === "get_sale_detail") {
             const { order_id } = body;
@@ -1369,7 +1537,7 @@ export default async function handler(req, res) {
 
             const order = orders[0];
             const invoices = (order.invoice_ids && order.invoice_ids.length > 0)
-                ? await execute("account.move", "search_read", [[["id", "in", order.invoice_ids]]], { fields: ["id", "name", "state", "payment_state", "amount_total", "invoice_date_due"] }).catch(() => [])
+                ? await execute("account.move", "search_read", [[["id", "in", order.invoice_ids]]], { fields: ["id", "name", "state", "payment_state", "amount_total", "amount_residual", "invoice_date_due"] }).catch(() => [])
                 : [];
 
             return res.status(200).json({ order, lines: lines || [], payment_terms: paymentTerms || [], products: products || [], warehouses: warehouses || [], invoices: invoices || [] });
