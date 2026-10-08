@@ -160,14 +160,16 @@ input[disabled] { background: #f0f0f0; color: #555; }
 /* Item da venda (layout: nome / Qtd + Desconto / subtotal + remover) */
 .line { background: #f8f9fb; padding: 14px; }
 .line .pname { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 14px; font-weight: 700; font-size: 15px; margin-bottom: 12px; }
-.line .cols { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: end; }
+.line .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: end; }
 .line .col label { display: block; font-size: 12px; font-weight: 700; color: #555; margin-bottom: 5px; }
 .line .stepper { justify-content: space-between; background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 4px; gap: 4px; }
 .line .stepper button { width: 48px; height: 44px; border: none; border-radius: 9px; background: #f1f1f4; }
 .line .stepper span { min-width: 34px; font-size: 18px; }
 .line .dsc { display: flex; gap: 8px; }
-.line .dsc input { width: 64px; flex: none; min-width: 0; text-align: center; padding: 12px 8px; font-size: 16px; border-radius: 12px; }
-.line .dsc select { width: 62px; flex: none; padding: 12px 4px; font-size: 15px; font-weight: 700; border-radius: 12px; }
+.line .dsc input { width: auto; flex: 1; min-width: 0; text-align: center; padding: 12px 8px; font-size: 16px; border-radius: 12px; }
+.line .dsc input:disabled, .line .dsc select:disabled { background: #f1f1f4; color: #888; }
+.line .stepper button:disabled { opacity: .45; }
+.line .dsc select { width: 64px; flex: none; padding: 12px 4px; font-size: 15px; font-weight: 700; border-radius: 12px; }
 .line .foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 12px; }
 .line .foot .sub { margin-left: 0; font-size: 17px; }
 .line .foot .eq { font-size: 12px; color: var(--muted); margin-right: auto; }
@@ -330,6 +332,7 @@ input[disabled] { background: #f0f0f0; color: #555; }
 
 <!-- NOVA VENDA -->
 <section class="screen" id="novaVenda">
+    <div class="status" id="nvAviso" style="display:none; margin-bottom:10px"></div>
     <label class="f" style="margin-top:0">Cliente *</label>
     <div id="nvClienteBox"></div>
 
@@ -1060,6 +1063,7 @@ function atualizarTotal() {
 }
 
 function renderLinhas() {
+    const trv = venda.travada ? ' disabled' : '';
     $('nvLinhas').innerHTML = venda.linhas.map(l => `
         <div class="line">
             <div class="pname">${esc(l.nome)}</div>
@@ -1067,26 +1071,26 @@ function renderLinhas() {
                 <div class="col">
                     <label>Qtd.</label>
                     <div class="stepper">
-                        <button onclick="mudarQtd(${l.id}, -1)">−</button><span>${l.qty}</span><button onclick="mudarQtd(${l.id}, 1)">+</button>
+                        <button onclick="mudarQtd(${l.id}, -1)"${trv}>−</button><span>${l.qty}</span><button onclick="mudarQtd(${l.id}, 1)"${trv}>+</button>
                     </div>
                 </div>
                 <div class="col">
                     <label>Desconto</label>
-                    ${l.lineId ? `<div class="dsc-fixo">${fmtPct(Number(l.discVal) || 0)}</div>` : `<div class="dsc">
-                        <input type="number" inputmode="decimal" step="0.01" min="0" placeholder="0" value="${l.discVal || ''}" oninput="mudarDesc(${l.id}, this.value)">
-                        <select onchange="mudarTipoDesc(${l.id}, this.value)">
+                    <div class="dsc">
+                        <input type="number" inputmode="decimal" step="0.01" min="0" placeholder="0" value="${l.discVal || ''}" oninput="mudarDesc(${l.id}, this.value)"${trv}>
+                        <select onchange="mudarTipoDesc(${l.id}, this.value)"${trv}>
                             <option value="R$"${l.discTipo === 'R$' ? ' selected' : ''}>R$</option>
                             <option value="%"${l.discTipo === '%' ? ' selected' : ''}>%</option>
                         </select>
-                    </div>`}
+                    </div>
                 </div>
             </div>
             <div class="foot">
                 <span class="eq" id="eq${l.id}"></span>
                 <div class="sub" id="sub${l.id}"></div>
-                <button class="rm" onclick="removerLinha(${l.id})" aria-label="Remover">×</button>
+                ${venda.travada ? '' : `<button class="rm" onclick="removerLinha(${l.id})" aria-label="Remover">×</button>`}
             </div>
-            ${l.qty > l.estoque ? `<div class="warn-txt">Atenção: só há ${l.estoque} un em estoque.</div>` : ''}
+            ${(!venda.travada && l.qty > l.estoque) ? `<div class="warn-txt">Atenção: só há ${l.estoque} un em estoque.</div>` : ''}
         </div>`).join('');
     venda.linhas.forEach(atualizarLinha);
     atualizarTotal();
@@ -1103,10 +1107,16 @@ function voltarParaVendas() {
 // Ajusta a tela "Nova venda" para o modo edição (e volta ao normal numa venda nova)
 function aplicarModoTelaVenda() {
     const editando = !!(venda && venda.editId);
-    $('nvData').disabled = false;
-    $('nvVenc').disabled = false;
+    const travada = !!(venda && venda.travada);
+    $('nvData').disabled = travada;
+    $('nvVenc').disabled = travada;
     $('btnOrcamento').style.display = editando ? 'none' : '';
+    $('btnConfirmarVenda').style.display = travada ? 'none' : '';
     $('btnConfirmarVenda').textContent = editando ? 'Salvar alterações' : 'Salvar';
+    $('nvProdBtn').style.display = travada ? 'none' : '';
+    const av = $('nvAviso');
+    av.style.display = travada ? 'block' : 'none';
+    av.textContent = travada ? 'Fatura paga: a venda está travada. Desfaça o pagamento para editar.' : '';
 }
 
 async function abrirEdicaoVenda(id) {
@@ -1121,11 +1131,13 @@ async function abrirEdicaoVenda(id) {
     if (!Array.isArray(o.warehouse_id)) return toast('A venda não tem local de estoque definido.', 'err');
 
     const faturaAtiva = (d.invoices || []).find(i => i.state !== 'cancel');
+    const travada = (d.invoices || []).some(i => i.state !== 'cancel' && ['paid', 'in_payment', 'partial'].includes(i.payment_state));
     const vencAtual = (faturaAtiva && faturaAtiva.invoice_date_due) || o.validity_date || '';
     const dt = new Date(String(o.date_order || '').replace(' ', 'T') + 'Z');
     const p2 = n => String(n).padStart(2, '0');
     venda = {
         editId: o.id,
+        travada,
         nome: o.name,
         partner: { id: o.partner_id[0], name: o.partner_id[1] },
         warehouse: String(o.warehouse_id[0]),
