@@ -141,6 +141,7 @@ input[disabled] { background: #f0f0f0; color: #555; }
 
 
 /* Data compacta e desconto por item */
+.dsc-fixo { padding: 10px 0; font-weight: 700; color: #555; font-size: 14px; }
 .in-data { width: auto; max-width: 170px; padding: 8px 10px; font-size: 14px; border-radius: 10px; }
 .line .sub { text-align: right; font-weight: 800; font-size: 15px; margin-left: auto; line-height: 1.15; }
 .line .sub small { display: inline; margin-right: 6px; font-weight: 600; font-size: 12px; color: #888; text-decoration: line-through; }
@@ -536,7 +537,7 @@ function ir(tela) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     $(tela).classList.add('active');
     const home = tela === 'home';
-    $('titulo').textContent = TITULOS[tela];
+    $('titulo').textContent = (tela === 'novaVenda' && venda && venda.editId) ? ('Venda ' + venda.nome) : TITULOS[tela];
     $('titulo').style.display = 'block';
     $('btnLocal').style.display = 'none';
     $('chipLocal').style.display = 'inline-block';
@@ -864,7 +865,7 @@ async function carregarVendas() {
         : '<span class="badge b-info">Sem fatura</span>';
 
     $('venLista').innerHTML = d.result.map(o => `
-        <div class="card">
+        <div class="card"${(o.state === 'sale' || o.state === 'done') ? ` onclick="abrirEdicaoVenda(${o.id})" style="cursor:pointer"` : ''}>
             <div class="row"><div class="t">${esc(o.name)}</div><div class="money">${brl(o.amount_total)}</div></div>
             <div class="s">${esc(Array.isArray(o.partner_id) ? o.partner_id[1] : '-')}</div>
             <div class="s">${dataHora(o.date_order)}</div>
@@ -896,6 +897,7 @@ function abrirNovaVenda() {
 async function iniciarNovaVenda() {
     venda = { partner: null, warehouse: String(meuLocal.wh.id), produtos: [], linhas: [], data: dataLocalAgora().slice(0, 10) };
     $('nvData').value = venda.data;
+    aplicarModoTelaVenda();
     fecharListaProdutos();
     renderCliente();
     renderLinhas();
@@ -907,7 +909,7 @@ async function iniciarNovaVenda() {
 function renderCliente() {
     const box = $('nvClienteBox');
     if (venda.partner) {
-        box.innerHTML = `<div class="picked"><span>${esc(venda.partner.name)}</span><button onclick="trocarCliente()">trocar</button></div>`;
+        box.innerHTML = `<div class="picked"><span>${esc(venda.partner.name)}</span>${venda.editId ? '' : '<button onclick="trocarCliente()">trocar</button>'}</div>`;
     } else {
         box.innerHTML = `<input type="text" id="nvCliBusca" placeholder="Buscar ou criar cliente..." oninput="debounce('cli', buscarCliente, 350)" autocomplete="off">
                          <div id="nvCliRes"></div>`;
@@ -936,16 +938,27 @@ async function criarCliente() {
 }
 
 async function carregarProdutosDoLocal() {
-    venda.warehouse = String(meuLocal.wh.id);
+    if (!venda.editId) venda.warehouse = String(meuLocal.wh.id);
     const btn = $('nvProdBtn');
     btn.disabled = true;
     btn.textContent = 'Carregando produtos...';
-    const d = await api('get_warehouse_products', { warehouse_id: meuLocal.wh.id });
+    const d = await api('get_warehouse_products', { warehouse_id: Number(venda.warehouse) });
     if (!d.products) { btn.textContent = 'Erro ao carregar'; toast(d.error || 'Erro ao carregar produtos.', 'err'); return; }
     venda.produtos = d.products;
     btn.textContent = d.products.length ? '＋ Adicionar produto' : 'Sem estoque neste local';
     btn.disabled = d.products.length === 0;
     renderListaProdutos();
+
+    // editando uma venda lançada: o estoque disponível das linhas antigas é o do local + o que a própria venda já separou
+    if (venda.editId) {
+        venda.linhas.forEach(l => {
+            if (!l.lineId) return;
+            const p = d.products.find(x => x.id === l.id);
+            l.estoque = (p ? p.stock_qty : 0) + (l.qtyOrig || 0);
+        });
+        renderLinhas();
+        return;
+    }
 
     // remove das linhas os produtos que não existem neste local
     const antes = venda.linhas.length;
@@ -987,7 +1000,7 @@ function mudarQtd(id, delta) {
     const l = venda.linhas.find(x => x.id === id);
     if (!l) return;
     l.qty += delta;
-    if (l.qty < 1) venda.linhas = venda.linhas.filter(x => x.id !== id);
+    if (l.qty < 1) { removerLinha(id); return; }
     renderLinhas();
 }
 /* Desconto: o Odoo só aceita % por linha; se o usuário digitar em R$, converte para % */
@@ -1022,7 +1035,13 @@ function mudarTipoDesc(id, tipo) {
     l.discVal = tipo === 'R$' ? Math.round(bruto(l) * p) / 100 : Math.round(p * 100) / 100;
     renderLinhas();
 }
-function removerLinha(id) { venda.linhas = venda.linhas.filter(x => x.id !== id); renderLinhas(); }
+function removerLinha(id) {
+    const l = venda.linhas.find(x => x.id === id);
+    // linha que já existe na venda lançada: guarda para excluir no Odoo
+    if (l && l.lineId) { venda.removidos = venda.removidos || []; venda.removidos.push(l.lineId); }
+    venda.linhas = venda.linhas.filter(x => x.id !== id);
+    renderLinhas();
+}
 
 function atualizarTotal() {
     $('nvTotal').textContent = brl(venda.linhas.reduce((s, l) => s + totalLinha(l), 0));
@@ -1041,13 +1060,13 @@ function renderLinhas() {
                 </div>
                 <div class="col">
                     <label>Desconto</label>
-                    <div class="dsc">
+                    ${l.lineId ? `<div class="dsc-fixo">${fmtPct(Number(l.discVal) || 0)}</div>` : `<div class="dsc">
                         <input type="number" inputmode="decimal" step="0.01" min="0" placeholder="0" value="${l.discVal || ''}" oninput="mudarDesc(${l.id}, this.value)">
                         <select onchange="mudarTipoDesc(${l.id}, this.value)">
                             <option value="R$"${l.discTipo === 'R$' ? ' selected' : ''}>R$</option>
                             <option value="%"${l.discTipo === '%' ? ' selected' : ''}>%</option>
                         </select>
-                    </div>
+                    </div>`}
                 </div>
             </div>
             <div class="foot">
@@ -1066,6 +1085,74 @@ function voltarParaVendas() {
     ir('vendas');
     $('venBusca').value = '';
     escolherStatus('all');
+}
+
+/* ============ Editar venda já lançada ============ */
+// Ajusta a tela "Nova venda" para o modo edição (e volta ao normal numa venda nova)
+function aplicarModoTelaVenda() {
+    const editando = !!(venda && venda.editId);
+    $('nvData').disabled = editando;
+    $('btnOrcamento').style.display = editando ? 'none' : '';
+    $('btnConfirmarVenda').textContent = editando ? 'Salvar alterações' : 'Salvar';
+}
+
+async function abrirEdicaoVenda(id) {
+    toast('Abrindo venda...', 'ok');
+    const d = await api('get_sale_detail', { order_id: id });
+    if (!d.order) return toast(d.error || 'Erro ao abrir a venda.', 'err');
+    const o = d.order;
+    if (o.state !== 'sale' && o.state !== 'done') return toast('Só vendas lançadas podem ser editadas.', 'err');
+    const linhasOdoo = d.lines || [];
+    const prodIds = linhasOdoo.map(l => l.product_id[0]);
+    if (new Set(prodIds).size !== prodIds.length) return toast('Esta venda tem o mesmo produto em mais de uma linha. Edite-a pelo computador.', 'err');
+    if (!Array.isArray(o.warehouse_id)) return toast('A venda não tem local de estoque definido.', 'err');
+
+    const dt = new Date(String(o.date_order || '').replace(' ', 'T') + 'Z');
+    const p2 = n => String(n).padStart(2, '0');
+    venda = {
+        editId: o.id,
+        nome: o.name,
+        partner: { id: o.partner_id[0], name: o.partner_id[1] },
+        warehouse: String(o.warehouse_id[0]),
+        produtos: [],
+        removidos: [],
+        data: isNaN(dt) ? '' : dt.getFullYear() + '-' + p2(dt.getMonth() + 1) + '-' + p2(dt.getDate()),
+        linhas: linhasOdoo.map(l => ({
+            id: l.product_id[0], lineId: l.id, nome: l.product_id[1],
+            qty: l.product_uom_qty, qtyOrig: l.product_uom_qty,
+            price: l.price_unit, estoque: l.product_uom_qty,
+            discTipo: '%', discVal: l.discount || 0
+        }))
+    };
+    $('nvData').value = venda.data;
+    aplicarModoTelaVenda();
+    fecharListaProdutos();
+    renderCliente();
+    renderLinhas();
+    if (pilha[pilha.length - 1] !== 'novaVenda') abrir('novaVenda'); else ir('novaVenda');
+    carregarProdutosDoLocal();
+}
+
+async function salvarEdicaoVenda() {
+    if (venda.linhas.length === 0) return toast('A venda precisa ter ao menos um produto. Para desfazê-la, cancele a venda.', 'err');
+    const btn = $('btnConfirmarVenda');
+    const txt = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Salvando...';
+    const d = await api('update_sale_lines', {
+        order_id: venda.editId,
+        lines: venda.linhas.map(l => ({ id: l.lineId || null, product_id: l.id, qty: l.qty, price: l.price, discount: Number(pctDesc(l).toFixed(4)) })),
+        removed_line_ids: venda.removidos || []
+    });
+    btn.disabled = false;
+    btn.textContent = txt;
+    if (d.success) {
+        const avisos = (d.warnings || []).join(' ');
+        toast('Venda atualizada!' + (avisos ? ' ' + avisos : ''), avisos ? 'err' : 'ok');
+        voltarParaVendas();
+    } else {
+        toast(d.error || 'Erro ao salvar as alterações.', 'err');
+    }
 }
 
 /* ============ Pagamento da fatura ============ */
@@ -1119,6 +1206,7 @@ async function criarPagamento() {
 }
 
 async function salvarVenda(confirmar) {
+    if (venda.editId) return salvarEdicaoVenda();
     if (!venda.partner) return toast('Selecione um cliente.', 'err');
     if (!meuLocal) return toast('Escolha o seu local.', 'err');
     if (venda.linhas.length === 0) return toast('Adicione ao menos um produto.', 'err');
