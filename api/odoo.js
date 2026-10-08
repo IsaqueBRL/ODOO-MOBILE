@@ -1467,15 +1467,20 @@ export default async function handler(req, res) {
             if (body.warehouse_id) {
                 domain.push(['warehouse_id', '=', parseInt(body.warehouse_id, 10)]);
             }
-            const statusGroups = { draft: ['draft', 'sent'], sale: ['sale', 'done'], cancel: ['cancel'] };
+            // "sale" (Confirmadas = lançadas e NÃO pagas) e "paid" (Pago) partem das vendas lançadas e são separadas
+            // depois, pelo status de pagamento das faturas
+            const statusGroups = { draft: ['draft', 'sent'], sale: ['sale', 'done'], paid: ['sale', 'done'], cancel: ['cancel'] };
+            const filtroPagamento = (body.order_status === 'sale' || body.order_status === 'paid') ? body.order_status : null;
             if (body.order_status && statusGroups[body.order_status]) {
                 domain.push(['state', 'in', statusGroups[body.order_status]]);
             }
 
+            const limiteTela = Math.min(Math.max(parseInt(body.limit, 10) || 100, 1), 1000);
             const orders = await execute("sale.order", "search_read", [domain], {
                 fields: ["id", "name", "partner_id", "amount_total", "state", "invoice_status", "invoice_ids", "warehouse_id", "date_order"],
-                order: "id desc",
-                limit: Math.min(Math.max(parseInt(body.limit, 10) || 100, 1), 1000)
+                // mais recente primeiro (pela data da venda)
+                order: "date_order desc, id desc",
+                limit: filtroPagamento ? 1000 : limiteTela
             });
 
             // Busca em lote o status de pagamento das faturas ligadas a cada pedido
@@ -1490,8 +1495,9 @@ export default async function handler(req, res) {
                 (invoices || []).forEach(inv => { invoiceMap[inv.id] = inv; });
             }
 
-            const result = (orders || []).map(o => {
-                const invs = (o.invoice_ids || []).map(id => invoiceMap[id]).filter(Boolean);
+            let result = (orders || []).map(o => {
+                // faturas canceladas (ex.: refeitas ao editar a venda) não contam
+                const invs = (o.invoice_ids || []).map(id => invoiceMap[id]).filter(i => i && i.state !== 'cancel');
                 let paymentSummary = "nao_faturado";
                 if (invs.length > 0) {
                     const allPaid = invs.every(i => i.payment_state === 'paid' || i.payment_state === 'in_payment');
@@ -1499,6 +1505,10 @@ export default async function handler(req, res) {
                 }
                 return { ...o, payment_summary: paymentSummary };
             });
+
+            if (filtroPagamento === 'paid') result = result.filter(o => o.payment_summary === 'pago');
+            if (filtroPagamento === 'sale') result = result.filter(o => o.payment_summary !== 'pago');
+            result = result.slice(0, limiteTela);
 
             return res.status(200).json({ result });
         }
