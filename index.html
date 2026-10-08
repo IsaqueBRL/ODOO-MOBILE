@@ -155,6 +155,13 @@ input[disabled] { background: #f0f0f0; color: #555; }
 .datas-row > div { flex: 1; min-width: 0; }
 .datas-row .in-data { width: 100%; max-width: none; }
 .dsc-fixo { padding: 10px 0; font-weight: 700; color: #555; font-size: 14px; }
+/* Campos de data: mostram sempre DD/MM/AAAA (o seletor nativo fica por cima, invisível, só para abrir o calendário) */
+.date-box { position: relative; display: flex; align-items: center; justify-content: space-between; height: 46px; padding: 0 12px; background: #fff; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.date-box .date-txt { font-size: 15px; font-weight: 600; color: var(--text); white-space: nowrap; }
+.date-box .date-ico { font-size: 15px; opacity: .7; }
+.date-box.off { background: #f1f1f4; }
+.date-box.off .date-txt { color: #888; }
+.date-box input.in-data { position: absolute; inset: 0; width: 100%; height: 100%; max-width: none; margin: 0; padding: 0; border: 0; opacity: 0; -webkit-appearance: none; appearance: none; font-size: 16px; }
 .in-data { width: auto; max-width: 170px; padding: 8px 10px; font-size: 14px; border-radius: 10px; }
 .line .sub { text-align: right; font-weight: 800; font-size: 15px; margin-left: auto; line-height: 1.15; }
 .line .sub small { display: inline; margin-right: 6px; font-weight: 600; font-size: 12px; color: #888; text-decoration: line-through; }
@@ -354,11 +361,17 @@ input[disabled] { background: #f0f0f0; color: #555; }
     <div class="datas-row">
         <div>
             <label class="f" for="nvData">Data da venda</label>
-            <input type="date" id="nvData" class="in-data" onchange="venda.data = this.value">
+            <div class="date-box" id="nvDataBox">
+                <span class="date-txt" id="nvDataTxt">dd/mm/aaaa</span><span class="date-ico">📅</span>
+                <input type="date" id="nvData" class="in-data" onchange="venda.data = this.value; atualizarTextoDatas()">
+            </div>
         </div>
         <div>
             <label class="f" for="nvVenc">Vencimento</label>
-            <input type="date" id="nvVenc" class="in-data" onchange="venda.venc = this.value">
+            <div class="date-box" id="nvVencBox">
+                <span class="date-txt" id="nvVencTxt">dd/mm/aaaa</span><span class="date-ico">📅</span>
+                <input type="date" id="nvVenc" class="in-data" onchange="venda.venc = this.value; atualizarTextoDatas()">
+            </div>
         </div>
     </div>
 
@@ -951,6 +964,7 @@ async function iniciarNovaVenda() {
     venda = { partner: null, warehouse: String(meuLocal.wh.id), produtos: [], linhas: [], data: dataLocalAgora().slice(0, 10), venc: dataLocalAgora().slice(0, 10) };
     $('nvData').value = venda.data;
     $('nvVenc').value = venda.venc;
+    atualizarTextoDatas();
     aplicarModoTelaVenda();
     fecharListaProdutos();
     renderCliente();
@@ -1150,6 +1164,7 @@ function aplicarModoTelaVenda() {
     const travada = !!(venda && venda.travada);
     $('nvData').disabled = travada;
     $('nvVenc').disabled = travada;
+    atualizarTextoDatas();
     $('btnOrcamento').style.display = editando ? 'none' : '';
     $('btnConfirmarVenda').style.display = travada ? 'none' : '';
     $('btnConfirmarVenda').textContent = editando ? 'Salvar alterações' : 'Salvar';
@@ -1203,6 +1218,7 @@ async function abrirEdicaoVenda(id) {
     venda.dataOrig = venda.data;
     $('nvData').value = venda.data;
     $('nvVenc').value = venda.venc;
+    atualizarTextoDatas();
     aplicarModoTelaVenda();
     fecharListaProdutos();
     renderCliente();
@@ -1210,6 +1226,14 @@ async function abrirEdicaoVenda(id) {
     venda.sigOrig = assinaturaVenda();
     if (pilha[pilha.length - 1] !== 'novaVenda') abrir('novaVenda'); else ir('novaVenda');
     carregarProdutosDoLocal();
+}
+
+function atualizarTextoDatas() {
+    const fmt = iso => iso ? iso.split('-').reverse().join('/') : 'dd/mm/aaaa';
+    $('nvDataTxt').textContent = fmt($('nvData').value);
+    $('nvVencTxt').textContent = fmt($('nvVenc').value);
+    $('nvDataBox').classList.toggle('off', $('nvData').disabled);
+    $('nvVencBox').classList.toggle('off', $('nvVenc').disabled);
 }
 
 /* Pagar / Cancelar a venda aberta (modo edição) */
