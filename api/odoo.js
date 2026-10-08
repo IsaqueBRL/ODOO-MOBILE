@@ -1333,10 +1333,11 @@ export default async function handler(req, res) {
         // AÇÃO: BUSCAR PARCEIROS
         if (action === "search_partners") {
             const query = body.query || "";
-            const domain = query ? [["name", "ilike", query]] : [];
+            // exact: nome idêntico (sem diferenciar maiúsculas/minúsculas) — usado para achar o cliente padrão "CLIENTE"
+            const domain = query ? [["name", body.exact ? "=ilike" : "ilike", query]] : [];
             const result = await execute("res.partner", "search_read", [domain], {
                 fields: ["id", "name", "email", "phone"],
-                limit: 20
+                limit: body.exact ? 5 : 20
             });
             return res.status(200).json({ partners: result || [] });
         }
@@ -1348,14 +1349,16 @@ export default async function handler(req, res) {
                 return res.status(400).json({ error: "Nome do parceiro é obrigatório." });
             }
 
+            // padrão do sistema: nome do cliente sempre em MAIÚSCULAS
+            const nomeCliente = name.trim().toUpperCase();
             const newPartnerId = await execute("res.partner", "create", [{
-                name: name.trim(),
+                name: nomeCliente,
                 email: email ? email.trim() : false,
                 phone: phone ? phone.trim() : false,
                 customer_rank: 1
             }]);
 
-            return res.status(200).json({ success: true, id: newPartnerId, name: name.trim() });
+            return res.status(200).json({ success: true, id: newPartnerId, name: nomeCliente });
         }
 
         // AÇÃO: BUSCAR ESTOQUE
