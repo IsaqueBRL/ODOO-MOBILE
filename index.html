@@ -1022,9 +1022,15 @@ function renderCliente() {
     if (venda.partner) {
         box.innerHTML = `<div class="picked"><span>${esc(venda.partner.name)}</span>${venda.editId ? '' : '<button onclick="trocarCliente()">trocar</button>'}</div>`;
     } else {
-        box.innerHTML = `<input type="text" id="nvCliBusca" placeholder="Buscar ou criar cliente..." oninput="debounce('cli', buscarCliente, 350)" autocomplete="off">
+        box.innerHTML = `<input type="text" id="nvCliBusca" placeholder="Buscar ou criar cliente..." style="text-transform: uppercase" autocapitalize="characters" oninput="clienteMaiusculo(this); debounce('cli', buscarCliente, 350)" autocomplete="off">
                          <div id="nvCliRes"></div>`;
     }
+}
+// Cliente sempre em MAIÚSCULAS, mesmo que o teclado esteja em minúsculas (mantém a posição do cursor)
+function clienteMaiusculo(el) {
+    const a = el.selectionStart, b = el.selectionEnd;
+    const up = el.value.toUpperCase();
+    if (up !== el.value) { el.value = up; try { el.setSelectionRange(a, b); } catch (e) {} }
 }
 function trocarCliente() { venda.partner = null; renderCliente(); }
 
@@ -1041,7 +1047,7 @@ async function buscarCliente() {
 function escolherCliente(id, name) { venda.partner = { id, name }; renderCliente(); }
 
 async function criarCliente() {
-    const nome = ($('nvCliBusca').value || '').trim();
+    const nome = ($('nvCliBusca').value || '').trim().toUpperCase();
     if (!nome) return;
     const d = await api('create_partner', { name: nome });
     if (d.success) { escolherCliente(d.id, d.name); toast('Cliente criado.', 'ok'); }
@@ -1393,10 +1399,19 @@ async function criarPagamento() {
 
 async function salvarVenda(confirmar) {
     if (venda.editId) return salvarEdicaoVenda();
-    if (!venda.partner) return toast('Selecione um cliente.', 'err');
     if (!meuLocal) return toast('Escolha o seu local.', 'err');
     if (venda.linhas.length === 0) return toast('Adicione ao menos um produto.', 'err');
     if (!venda.data) return toast('Informe a data da venda.', 'err');
+
+    // Sem cliente: avisa e usa o cliente padrão "CLIENTE" (já cadastrado no Odoo), para o campo não ficar em branco
+    if (!venda.partner) {
+        if (!confirm('Nenhum cliente foi informado.\n\nA venda será lançada com o cliente "CLIENTE". Deseja continuar?')) return;
+        const dc = await api('search_partners', { query: 'CLIENTE', exact: true });
+        const padrao = (dc.partners || []).find(p => String(p.name).trim().toUpperCase() === 'CLIENTE');
+        if (!padrao) return toast('Não encontrei o cliente "CLIENTE" no Odoo. Selecione um cliente.', 'err');
+        venda.partner = { id: padrao.id, name: padrao.name };
+        renderCliente();
+    }
 
     const btnA = $('btnConfirmarVenda'), btnB = $('btnOrcamento');
     const txtA = btnA.textContent, txtB = btnB.textContent;
