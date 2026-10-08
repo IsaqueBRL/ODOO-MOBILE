@@ -224,6 +224,12 @@ input[disabled] { background: #f0f0f0; color: #555; }
 /* Transferências */
 .form-card { background: #fff; border: 1px solid var(--border); border-radius: 16px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.04); }
 .form-title { font-size: 16px; color: #222; border-left: 4px solid var(--primary); padding-left: 10px; margin-bottom: 4px; }
+.th-lista { margin-top: 10px; }
+.th-item { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; background: #fff; }
+.th-item .th-top { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--muted); padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px dashed var(--border); }
+.th-item .th-top b { color: var(--primary); }
+.th-item .th-prod { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; font-weight: 700; padding: 2px 0; }
+.th-item .th-prod span:last-child { white-space: nowrap; }
 .form-card .seta { text-align: center; color: #888; font-size: 18px; margin: 10px 0 4px; }
 .tr-box { background: #f8f9fb; border: 1px solid var(--border); border-radius: 14px; padding: 12px; }
 .tr-item { margin-bottom: 14px; }
@@ -313,7 +319,7 @@ input[disabled] { background: #f0f0f0; color: #555; }
         <select id="trOrigem" onchange="mudarOrigemTransf()"></select>
         <div class="seta">⬇</div>
         <label class="f" style="margin-top:0">Local de Destino</label>
-        <select id="trDestino" onchange="trf.destino = this.value"></select>
+        <select id="trDestino" onchange="trf.destino = this.value; travarLocaisIguais()"></select>
 
         <label class="f" style="margin-top:18px">Produtos a Transferir</label>
         <div class="tr-box">
@@ -322,6 +328,11 @@ input[disabled] { background: #f0f0f0; color: #555; }
         </div>
         <button type="button" class="btn-add" onclick="adicionarLinhaTransf()">＋ Adicionar produto</button>
         <button type="button" class="btn ok-btn" id="trSalvar" onclick="salvarTransferencia()">🔁 Transferir Estoque</button>
+    </div>
+
+    <div class="form-card" style="margin-top:14px">
+        <h2 class="form-title">Histórico de Transferências</h2>
+        <div id="trHist" class="th-lista"><div class="status">Carregando...</div></div>
     </div>
 </section>
 
@@ -770,9 +781,11 @@ function abrirTransferencias() {
         $('trDestino').innerHTML = '<option value="">Escolha o destino...</option>' + whs.map(w => `<option value="${w.lot_stock_id[0]}">${esc(w.name)}</option>`).join('');
         $('trOrigem').value = origemPadrao;
         trf = { origem: origemPadrao, destino: '', produtos: [], linhas: [], pickUid: null };
+        travarLocaisIguais();
         adicionarLinhaTransf();
         abrir('transfer');
         carregarProdutosTransf();
+        carregarHistoricoTransf();
     });
 }
 
@@ -793,8 +806,30 @@ async function carregarProdutosTransf() {
     renderLinhasTransf();
 }
 
+// Origem e destino nunca podem ser o mesmo local: a opção escolhida num lado fica desabilitada no outro
+function travarLocaisIguais() {
+    const o = $('trOrigem'), d = $('trDestino');
+    if (d.value && d.value === o.value) { d.value = ''; trf.destino = ''; }
+    Array.from(d.options).forEach(op => { op.disabled = !!op.value && op.value === o.value; });
+    Array.from(o.options).forEach(op => { op.disabled = !!op.value && op.value === d.value; });
+}
+
+async function carregarHistoricoTransf() {
+    const box = $('trHist');
+    if (!meuLocal || !meuLocal.wh) { box.innerHTML = ''; return; }
+    const d = await api('get_transfer_history', { warehouse_id: meuLocal.wh.id });
+    if (!d.result) { box.innerHTML = `<div class="status">${esc(d.error || 'Erro ao carregar o histórico.')}</div>`; return; }
+    if (d.result.length === 0) { box.innerHTML = '<div class="status">Nenhuma transferência neste local.</div>'; return; }
+    box.innerHTML = d.result.map(t => `
+        <div class="th-item">
+            <div class="th-top"><b>${esc(t.name)}</b><span>${dataCurta(t.date_done)}</span></div>
+            ${t.lines.map(l => `<div class="th-prod"><span>${esc(l.name)}</span><span>${fmtQtd(l.qty)} un.</span></div>`).join('')}
+        </div>`).join('');
+}
+
 function mudarOrigemTransf() {
     trf.origem = $('trOrigem').value;
+    travarLocaisIguais();
     trf.produtos = [];
     trf.linhas.forEach(l => { l.pid = null; l.nome = ''; l.estoque = 0; });
     renderLinhasTransf();
@@ -879,6 +914,7 @@ async function salvarTransferencia() {
         trf.linhas = [];
         adicionarLinhaTransf();
         carregarProdutosTransf();   // saldos atualizados
+        carregarHistoricoTransf();
     } else {
         toast(d.error || 'Erro ao transferir.', 'err');
     }
