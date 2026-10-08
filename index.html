@@ -26,6 +26,7 @@ header.bar {
     padding: calc(12px + env(safe-area-inset-top, 0px)) 14px 12px; display: flex; align-items: center; gap: 10px;
 }
 header.bar h1 { font-size: 18px; font-weight: 700; flex: 1; }
+header.bar h1 .badge { margin-left: 8px; vertical-align: middle; font-size: 11px; }
 .btn-back { background: rgba(255,255,255,.18); color: #fff; border: none; border-radius: 10px; width: 42px; height: 42px; font-size: 20px; cursor: pointer; display: none; }
 .btn-back.show { display: block; }
 
@@ -162,16 +163,16 @@ input[disabled] { background: #f0f0f0; color: #555; }
 /* Item da venda (layout: nome / Qtd + Desconto / subtotal + remover) */
 .line { background: #f8f9fb; padding: 14px; }
 .line .pname { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 14px; font-weight: 700; font-size: 15px; margin-bottom: 12px; }
-.line .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: end; }
+.line .cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: end; }
 .line .col label { display: block; font-size: 12px; font-weight: 700; color: #555; margin-bottom: 5px; }
 .line .stepper { justify-content: space-between; background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 4px; gap: 4px; }
-.line .stepper button { width: 48px; height: 44px; border: none; border-radius: 9px; background: #f1f1f4; }
-.line .stepper span { min-width: 34px; font-size: 18px; }
+.line .stepper button { flex: 1; min-width: 0; width: auto; height: 44px; border: none; border-radius: 9px; background: #f1f1f4; }
+.line .stepper span { flex: none; min-width: 26px; text-align: center; font-size: 18px; }
 .line .dsc { display: flex; gap: 8px; }
 .line .dsc input { width: auto; flex: 1; min-width: 0; text-align: center; padding: 12px 8px; font-size: 16px; border-radius: 12px; }
 .line .dsc input:disabled, .line .dsc select:disabled { background: #f1f1f4; color: #888; }
 .line .stepper button:disabled { opacity: .45; }
-.line .dsc select { width: 64px; flex: none; padding: 12px 4px; font-size: 15px; font-weight: 700; border-radius: 12px; }
+.line .dsc select { width: 58px; flex: none; padding: 12px 4px; font-size: 15px; font-weight: 700; border-radius: 12px; }
 .line .foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 12px; }
 .line .foot .sub { margin-left: 0; font-size: 17px; }
 .line .foot .eq { font-size: 12px; color: var(--muted); margin-right: auto; }
@@ -556,6 +557,14 @@ function ir(tela) {
     $(tela).classList.add('active');
     const home = tela === 'home';
     $('titulo').textContent = (tela === 'novaVenda' && venda && venda.editId) ? ('Venda ' + venda.nome) : TITULOS[tela];
+    // status atual da venda ao lado do número
+    if (tela === 'novaVenda' && venda && venda.editId) {
+        const s = venda.estado;
+        const bd = s === 'cancel' ? '<span class="badge b-bad">Cancelada</span>'
+            : (s === 'sale' || s === 'done') ? '<span class="badge b-ok">Confirmada</span>'
+            : '<span class="badge b-warn">Orçamento</span>';
+        $('titulo').insertAdjacentHTML('beforeend', bd);
+    }
     $('titulo').style.display = 'block';
     $('btnLocal').style.display = 'none';
     $('chipLocal').style.display = 'inline-block';
@@ -1143,6 +1152,7 @@ async function abrirEdicaoVenda(id) {
     const p2 = n => String(n).padStart(2, '0');
     venda = {
         editId: o.id,
+        estado: o.state,
         travada,
         nome: o.name,
         partner: { id: o.partner_id[0], name: o.partner_id[1] },
