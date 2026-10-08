@@ -229,6 +229,7 @@ input[disabled] { background: #f0f0f0; color: #555; }
 .th-item .th-top { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--muted); padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px dashed var(--border); }
 .th-item .th-top b { color: var(--primary); }
 .th-item .th-prod { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; font-weight: 700; padding: 2px 0; }
+.th-item .th-rota { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border); font-size: 13px; color: var(--muted); }
 .th-item .th-prod span:last-child { white-space: nowrap; }
 .form-card .seta { text-align: center; color: #888; font-size: 18px; margin: 10px 0 4px; }
 .tr-box { background: #f8f9fb; border: 1px solid var(--border); border-radius: 14px; padding: 12px; }
@@ -814,6 +815,9 @@ function travarLocaisIguais() {
     Array.from(o.options).forEach(op => { op.disabled = !!op.value && op.value === d.value; });
 }
 
+// "CASA/Stock" -> "CASA" (só o nome do local, sem a pasta de estoque)
+const nomeLocalCurto = n => String(n || '-').split('/')[0].trim() || '-';
+
 async function carregarHistoricoTransf() {
     const box = $('trHist');
     if (!meuLocal || !meuLocal.wh) { box.innerHTML = ''; return; }
@@ -824,6 +828,7 @@ async function carregarHistoricoTransf() {
         <div class="th-item">
             <div class="th-top"><b>${esc(t.name)}</b><span>${dataCurta(t.date_done)}</span></div>
             ${t.lines.map(l => `<div class="th-prod"><span>${esc(l.name)}</span><span>${fmtQtd(l.qty)} un.</span></div>`).join('')}
+            <div class="th-rota">${esc(nomeLocalCurto(t.origin))} &gt; ${esc(nomeLocalCurto(t.dest))}</div>
         </div>`).join('');
 }
 
