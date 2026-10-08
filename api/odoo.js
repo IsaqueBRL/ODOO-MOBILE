@@ -288,6 +288,67 @@ async function sincronizarEntregaComPedido(orderId) {
     return avisos;
 }
 
+// O Odoo não deixa reduzir/excluir uma linha abaixo do que já foi entregue.
+// Por isso a entrega (desbloqueada) é reduzida ANTES de alterar o pedido.
+async function reduzirEntregaAntesDoPedido(orderId, reducoes, remocoes) {
+    const avisos = [];
+    const linhasIds = [...reducoes.map(r => r.lineId), ...remocoes];
+    if (linhasIds.length === 0) return avisos;
+
+    // movimentos já concluídos dessas linhas, nas entregas do pedido (mais novos primeiro)
+    const moves = await execute("stock.move", "search_read", [[
+        ["sale_line_id", "in", linhasIds], ["state", "=", "done"], ["picking_id.picking_type_code", "=", "outgoing"]
+    ]], { fields: ["id", "sale_line_id", "quantity", "product_id"], order: "id desc" });
+    const porLinha = {};
+    (moves || []).forEach(m => {
+        if (!Array.isArray(m.sale_line_id)) return;
+        (porLinha[m.sale_line_id[0]] = porLinha[m.sale_line_id[0]] || []).push(m);
+    });
+
+    const escrever = async (mv, q) => {
+        try {
+            await execute("stock.move", "write", [[mv.id], { product_uom_qty: q, quantity: q }]);
+        } catch (e1) {
+            await execute("stock.move", "write", [[mv.id], { product_uom_qty: q }]);
+            await execute("stock.move", "write", [[mv.id], { quantity: q }]);
+        }
+    };
+
+    // quantidade reduzida: tira da entrega o que passou do novo valor
+    for (const r of reducoes) {
+        const lista = porLinha[r.lineId] || [];
+        const entregue = lista.reduce((t, m) => t + Number(m.quantity), 0);
+        let excesso = entregue - Number(r.qty);
+        for (const mv of lista) {
+            if (excesso <= 0) break;
+            const tira = Math.min(Number(mv.quantity), excesso);
+            try {
+                await escrever(mv, Number(mv.quantity) - tira);
+                excesso -= tira;
+            } catch (e) {
+                avisos.push("Não foi possível reduzir a entrega de " + (Array.isArray(mv.product_id) ? mv.product_id[1] : "um produto") + ": " + e.message);
+                break;
+            }
+        }
+    }
+
+    // produto excluído: retira da entrega (ou zera, se o Odoo não deixar excluir a linha)
+    for (const lid of remocoes) {
+        for (const mv of (porLinha[lid] || [])) {
+            try {
+                await execute("stock.move", "unlink", [[mv.id]]);
+            } catch (e1) {
+                try {
+                    await escrever(mv, 0);
+                } catch (e2) {
+                    avisos.push("Não foi possível retirar " + (Array.isArray(mv.product_id) ? mv.product_id[1] : "um produto") + " da entrega: " + e2.message);
+                }
+            }
+        }
+    }
+    return avisos;
+}
+
 export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -925,11 +986,15 @@ export default async function handler(req, res) {
             (atuais || []).forEach(l => { qtdAtual[l.id] = l.product_uom_qty; });
 
             const cmds = [];
+            const reducoes = [];
             for (const rid of (removed_line_ids || [])) cmds.push([2, Number(rid), 0]);
             for (const l of validas) {
                 if (l.id) {
                     const nova = Number(l.qty);
-                    if (qtdAtual[Number(l.id)] !== nova) cmds.push([1, Number(l.id), { product_uom_qty: nova }]);
+                    if (qtdAtual[Number(l.id)] !== nova) {
+                        cmds.push([1, Number(l.id), { product_uom_qty: nova }]);
+                        if (nova < qtdAtual[Number(l.id)]) reducoes.push({ lineId: Number(l.id), qty: nova });
+                    }
                 } else {
                     cmds.push([0, 0, {
                         product_id: Number(l.product_id),
@@ -956,6 +1021,14 @@ export default async function handler(req, res) {
                 await definirBloqueioEntregas(oid, false);
             } catch (e) { /* tenta editar mesmo assim */ }
 
+            // reduz a entrega antes (o Odoo não deixa o pedido ficar abaixo do já entregue)
+            const avisosPre = [];
+            try {
+                (await reduzirEntregaAntesDoPedido(oid, reducoes, (removed_line_ids || []).map(Number))).forEach(a => avisosPre.push(a));
+            } catch (e) {
+                avisosPre.push("Não foi possível reduzir a entrega antes de alterar a venda: " + e.message);
+            }
+
             try {
                 // "skip_procurement" pede ao Odoo para não criar entrega nova a cada ajuste
                 const vals = { validity_date: venc || false };
@@ -968,6 +1041,7 @@ export default async function handler(req, res) {
             }
 
             const warnings = [];
+            avisosPre.forEach(a => warnings.push(a));
 
             if (cmds.length > 0) {
                 // Mantém uma única entrega, igual ao pedido (produto e quantidade)
