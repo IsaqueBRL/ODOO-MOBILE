@@ -89,6 +89,8 @@ input[disabled] { background: #f0f0f0; color: #555; }
 .b-warn { background: #fff3e0; color: var(--warn); }
 .b-bad { background: #ffebee; color: var(--danger); }
 .b-info { background: #e3f2fd; color: #1976d2; }
+.b-grey { background: #eceff1; color: #546e7a; }
+.b-yellow { background: #fff3c4; color: #8a6d00; }
 .money { font-weight: 800; }
 .money.neg { color: var(--danger); }
 .money.pos { color: var(--ok); }
@@ -409,6 +411,7 @@ header.bar.is-home::after {
         <button class="chip" data-st="all" onclick="escolherStatus('all')">Todas</button>
         <button class="chip" data-st="draft" onclick="escolherStatus('draft')">Orçamentos</button>
         <button class="chip" data-st="sale" onclick="escolherStatus('sale')">Confirmadas</button>
+        <button class="chip" data-st="paid" onclick="escolherStatus('paid')">Pago</button>
         <button class="chip" data-st="cancel" onclick="escolherStatus('cancel')">Canceladas</button>
     </div>
     <div id="venStatus" class="status"></div>
@@ -696,8 +699,9 @@ function ir(tela) {
     if (tela === 'novaVenda' && venda && venda.editId) {
         const s = venda.estado;
         const bd = s === 'cancel' ? '<span class="badge b-bad">Cancelada</span>'
-            : (s === 'sale' || s === 'done') ? '<span class="badge b-ok">Confirmada</span>'
-            : '<span class="badge b-warn">Orçamento</span>';
+            : venda.travada ? '<span class="badge b-ok">Pago</span>'
+            : (s === 'sale' || s === 'done') ? '<span class="badge b-yellow">Confirmada</span>'
+            : '<span class="badge b-grey">Orçamento</span>';
         $('titulo').insertAdjacentHTML('beforeend', bd);
     }
     $('titulo').style.display = 'block';
@@ -1056,19 +1060,22 @@ async function carregarVendas() {
     if (d.result.length === 0) { $('venLista').innerHTML = ''; $('venStatus').textContent = 'Nenhuma venda encontrada.'; return; }
     $('venStatus').textContent = d.result.length + ' venda(s)';
 
-    const stBadge = s => s === 'cancel' ? '<span class="badge b-bad">Cancelada</span>'
-        : (s === 'sale' || s === 'done') ? '<span class="badge b-ok">Confirmada</span>'
-        : '<span class="badge b-warn">Orçamento</span>';
-    const pgBadge = p => p === 'pago' ? '<span class="badge b-ok">Pago</span>'
-        : p === 'nao_pago' ? '<span class="badge b-warn">Não pago</span>'
-        : '<span class="badge b-info">Sem fatura</span>';
+    // Um único status por venda: Orçamento (cinza) > Confirmada (amarelo) > Pago (verde)
+    const stBadge = o => o.state === 'cancel' ? '<span class="badge b-bad">Cancelada</span>'
+        : (o.state === 'sale' || o.state === 'done')
+            ? (o.payment_summary === 'pago' ? '<span class="badge b-ok">Pago</span>' : '<span class="badge b-yellow">Confirmada</span>')
+        : '<span class="badge b-grey">Orçamento</span>';
+
+    // Sempre da data mais recente para a mais antiga
+    const dataMs = o => { const t = new Date(String(o.date_order || '').replace(' ', 'T') + 'Z').getTime(); return isNaN(t) ? 0 : t; };
+    d.result.sort((a, b) => (dataMs(b) - dataMs(a)) || (b.id - a.id));
 
     $('venLista').innerHTML = d.result.map(o => `
         <div class="card"${(o.state === 'sale' || o.state === 'done') ? ` onclick="abrirEdicaoVenda(${o.id})" style="cursor:pointer"` : ''}>
             <div class="row"><div class="cli">${esc(Array.isArray(o.partner_id) ? o.partner_id[1] : '-')}</div><div class="money">${brl(o.amount_total)}</div></div>
             <div class="dt">${dataCurta(o.date_order)}</div>
             <div class="num">${esc(o.name)}</div>
-            <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap">${stBadge(o.state)} ${o.state !== 'cancel' ? pgBadge(o.payment_summary) : ''}</div>
+            <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap">${stBadge(o)}</div>
         </div>`).join('');
 }
 
