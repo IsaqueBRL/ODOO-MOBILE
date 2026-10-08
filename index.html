@@ -59,6 +59,8 @@ input[disabled] { background: #f0f0f0; color: #555; }
 .btn:disabled { opacity: .6; }
 .btn.sec { background: #fff; color: var(--primary); border: 2px solid var(--primary); }
 .btn.grey { background: #777; }
+.btn.danger { background: #c62828; }
+.btn.danger:active { background: #8e1c1c; }
 .btn.small { width: auto; display: inline-block; padding: 9px 14px; font-size: 14px; margin-top: 0; }
 
 .chips { display: flex; gap: 8px; margin: 12px 0; overflow-x: auto; padding-bottom: 2px; }
@@ -360,6 +362,8 @@ input[disabled] { background: #f0f0f0; color: #555; }
 
     <button class="btn" id="btnConfirmarVenda" onclick="salvarVenda(true)">Salvar</button>
     <button class="btn sec" id="btnOrcamento" onclick="salvarVenda(false)">Salvar Rascunho</button>
+    <button class="btn ok-btn" id="btnPagarVenda" onclick="pagarVendaAtual()" style="display:none">Pagar</button>
+    <button class="btn danger" id="btnCancelarVenda" onclick="cancelarVendaAtual()" style="display:none">Cancelar venda</button>
 </section>
 
 </main>
@@ -1114,6 +1118,8 @@ function aplicarModoTelaVenda() {
     $('btnConfirmarVenda').style.display = travada ? 'none' : '';
     $('btnConfirmarVenda').textContent = editando ? 'Salvar alterações' : 'Salvar';
     $('nvProdBtn').style.display = travada ? 'none' : '';
+    $('btnPagarVenda').style.display = (editando && venda.podePagar) ? '' : 'none';
+    $('btnCancelarVenda').style.display = (editando && !travada) ? '' : 'none';
     const av = $('nvAviso');
     av.style.display = travada ? 'block' : 'none';
     av.textContent = travada ? 'Fatura paga: a venda está travada. Desfaça o pagamento para editar.' : '';
@@ -1149,8 +1155,13 @@ async function abrirEdicaoVenda(id) {
             id: l.product_id[0], lineId: l.id, nome: l.product_id[1],
             qty: l.product_uom_qty, qtyOrig: l.product_uom_qty,
             price: l.price_unit, estoque: l.product_uom_qty,
-            discTipo: '%', discVal: l.discount || 0
-        }))
+            // o Odoo guarda %, mas aqui sempre mostramos em R$ (o mais usado); converte o % salvo para R$
+            discTipo: 'R$',
+            discVal: l.discount ? Math.round(l.product_uom_qty * l.price_unit * l.discount) / 100 : 0
+        })),
+        invoiceId: faturaAtiva ? faturaAtiva.id : null,
+        invoiceResidual: faturaAtiva ? (faturaAtiva.amount_residual > 0 ? faturaAtiva.amount_residual : faturaAtiva.amount_total) : 0,
+        podePagar: !!faturaAtiva && !['paid', 'in_payment'].includes(faturaAtiva.payment_state)
     };
     venda.dataOrig = venda.data;
     $('nvData').value = venda.data;
@@ -1159,8 +1170,39 @@ async function abrirEdicaoVenda(id) {
     fecharListaProdutos();
     renderCliente();
     renderLinhas();
+    venda.sigOrig = assinaturaVenda();
     if (pilha[pilha.length - 1] !== 'novaVenda') abrir('novaVenda'); else ir('novaVenda');
     carregarProdutosDoLocal();
+}
+
+/* Pagar / Cancelar a venda aberta (modo edição) */
+function assinaturaVenda() {
+    return JSON.stringify([venda.linhas.map(l => [l.id, l.qty, Number(pctDesc(l).toFixed(2))]), venda.data, venda.venc || '']);
+}
+
+async function pagarVendaAtual() {
+    if (!venda || !venda.editId || !venda.invoiceId) return toast('Esta venda não tem fatura para pagar.', 'err');
+    if (assinaturaVenda() !== venda.sigOrig) return toast('Há alterações não salvas. Toque em "Salvar alterações" antes de pagar.', 'err');
+    await abrirPagamento(venda.invoiceId, venda.invoiceResidual);
+}
+
+async function cancelarVendaAtual() {
+    if (!venda || !venda.editId || venda.travada) return;
+    if (!confirm('Cancelar a venda ' + (venda.nome || '') + '?\n\nOs itens voltam para o estoque e a fatura provisória é cancelada.')) return;
+    const btn = $('btnCancelarVenda');
+    btn.disabled = true;
+    const txt = btn.textContent;
+    btn.textContent = 'Cancelando...';
+    const d = await api('cancel_sale_order', { order_id: venda.editId });
+    btn.disabled = false;
+    btn.textContent = txt;
+    if (d.success) {
+        const avisos = (d.warnings || []).join(' ');
+        toast('Venda cancelada.' + (avisos ? ' ' + avisos : ''), avisos ? 'err' : 'ok');
+        voltarParaVendas();
+    } else {
+        toast(d.error || 'Erro ao cancelar a venda.', 'err');
+    }
 }
 
 async function salvarEdicaoVenda() {
