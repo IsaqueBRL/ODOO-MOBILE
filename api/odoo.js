@@ -1658,6 +1658,37 @@ export default async function handler(req, res) {
             return res.status(200).json({ result: result || [] });
         }
 
+        // AÇÃO: HISTÓRICO DE TRANSFERÊNCIAS CONCLUÍDAS LIGADAS AO LOCAL DO USUÁRIO (origem OU destino dentro do armazém)
+        if (action === "get_transfer_history") {
+            const whId = parseInt(body.warehouse_id, 10);
+            if (!whId) return res.status(400).json({ error: "Escolha o seu local." });
+            const whs = await execute("stock.warehouse", "read", [[whId]], { fields: ["view_location_id", "lot_stock_id"] });
+            const wh = whs && whs[0];
+            const raiz = wh ? ((Array.isArray(wh.view_location_id) && wh.view_location_id[0]) || (Array.isArray(wh.lot_stock_id) && wh.lot_stock_id[0])) : null;
+            if (!raiz) return res.status(404).json({ error: "Local não encontrado." });
+
+            const picks = await execute("stock.picking", "search_read", [[
+                ["picking_type_id.code", "=", "internal"],
+                ["state", "=", "done"],
+                "|", ["location_id", "child_of", raiz], ["location_dest_id", "child_of", raiz]
+            ]], { fields: ["id", "name", "date_done"], order: "date_done desc, id desc", limit: Math.min(parseInt(body.limit, 10) || 30, 100) });
+
+            let moves = [];
+            if (picks && picks.length > 0) {
+                moves = await execute("stock.move", "search_read", [[["picking_id", "in", picks.map(p => p.id)]]], {
+                    fields: ["picking_id", "product_id", "product_uom_qty"], limit: 2000
+                });
+            }
+            const result = (picks || []).map(p => ({
+                id: p.id,
+                name: p.name,
+                date_done: p.date_done,
+                lines: (moves || []).filter(m => Array.isArray(m.picking_id) && m.picking_id[0] === p.id)
+                    .map(m => ({ name: Array.isArray(m.product_id) ? m.product_id[1] : "-", qty: m.product_uom_qty }))
+            }));
+            return res.status(200).json({ result });
+        }
+
         // AÇÃO: DETALHES DE UMA TRANSFERÊNCIA
         if (action === "get_transfer_detail") {
             const { order_id } = body;
