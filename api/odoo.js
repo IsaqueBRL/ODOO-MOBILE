@@ -368,6 +368,79 @@ export default async function handler(req, res) {
             return idsDepois.filter(id => !idsAntes.includes(id));
         };
 
+        // Coloca a data de vencimento na "Data de vencimento" da fatura (a fatura não usa condição de pagamento)
+        const aplicarVencimentoNaFatura = async (invoiceId, dueDate) => {
+            if (!invoiceId || !dueDate) return;
+            await execute("account.move", "write", [[Number(invoiceId)], { invoice_date_due: dueDate }]);
+        };
+
+        // Fatura paga => tranca pedido e entrega; fatura não paga => ficam destravados
+        const sincronizarBloqueioPorFatura = async (invoiceId) => {
+            const pedidos = await execute("sale.order", "search_read", [[["invoice_ids", "in", [Number(invoiceId)]]]], { fields: ["id"] });
+            for (const ped of (pedidos || [])) await sincronizarBloqueioDoPedido(ped.id);
+        };
+        const faturasDoPagamento = async (paymentId) => {
+            try {
+                const p = await execute("account.payment", "read", [[Number(paymentId)]], { fields: ["reconciled_invoice_ids"] });
+                return (p && p[0] && p[0].reconciled_invoice_ids) || [];
+            } catch (e) { return []; }
+        };
+        const sincronizarPorPagamento = async (invoiceIds) => {
+            for (const id of (invoiceIds || [])) {
+                try { await sincronizarBloqueioPorFatura(id); } catch (e) { /* melhor esforço */ }
+            }
+        };
+
+        // Espelha a fatura do pedido com as linhas do pedido (produto, quantidade e preço):
+        // a fatura provisória é refeita a partir do pedido. Fatura já paga não é mexida.
+        const espelharFaturaComPedido = async (orderId, dueDate, hoje) => {
+            const oid = Number(orderId);
+            const avisos = [];
+            const ped = await execute("sale.order", "read", [[oid]], { fields: ["invoice_ids"] });
+            const ids = (ped && ped[0] && ped[0].invoice_ids) || [];
+            if (ids.length === 0) return avisos;
+
+            const faturas = await execute("account.move", "search_read", [[["id", "in", ids], ["state", "!=", "cancel"]]], { fields: ["id", "name", "state", "payment_state"] });
+            if (!faturas || faturas.length === 0) return avisos;
+
+            const comPagamento = faturas.filter(f => f.payment_state && !["not_paid"].includes(f.payment_state));
+            if (comPagamento.length > 0) {
+                avisos.push("A fatura " + comPagamento.map(f => f.name).join(", ") + " já tem pagamento e não foi ajustada. Desfaça o pagamento para a fatura acompanhar a venda.");
+                return avisos;
+            }
+
+            for (const f of faturas) {
+                try {
+                    if (f.state === "posted") await execute("account.move", "button_draft", [[f.id]]);
+                    try {
+                        await execute("account.move", "unlink", [[f.id]]);
+                    } catch (e1) {
+                        await execute("account.move", "button_cancel", [[f.id]]);
+                    }
+                } catch (e) {
+                    avisos.push("Não foi possível refazer a fatura " + f.name + ": " + e.message);
+                    return avisos;
+                }
+            }
+
+            try {
+                const novos = await criarFaturasDoPedido(oid);
+                if (!novos || novos.length === 0) {
+                    avisos.push("A fatura não foi refeita: o Odoo não gerou uma nova fatura para a venda.");
+                    return avisos;
+                }
+                for (const nid of novos) {
+                    await applyForcedAccountToInvoice(nid);
+                    const dados = { invoice_date: hoje };
+                    if (dueDate) dados.invoice_date_due = dueDate;
+                    await execute("account.move", "write", [[nid], dados]);
+                }
+            } catch (e) {
+                avisos.push("A fatura antiga foi desfeita, mas não foi possível gerar a nova: " + e.message + " Use \"Gerar Fatura\" no Odoo.");
+            }
+            return avisos;
+        };
+
         // Quando a geração da fatura não gera nenhuma fatura (sem lançar erro), busca o motivo
         // olhando quanto já foi pedido/entregue/faturado em cada linha, para explicar na mensagem
         const diagnosticarPedidoSemFatura = async (orderId) => {
@@ -429,7 +502,9 @@ export default async function handler(req, res) {
             const { payment_id } = body;
             if (!payment_id) return res.status(400).json({ error: "ID do pagamento é obrigatório." });
 
+            const faturasAntes = await faturasDoPagamento(payment_id);
             await execute("account.payment", "action_draft", [[Number(payment_id)]]);
+            await sincronizarPorPagamento(faturasAntes);
             return res.status(200).json({ success: true });
         }
 
@@ -439,6 +514,7 @@ export default async function handler(req, res) {
             if (!payment_id) return res.status(400).json({ error: "ID do pagamento é obrigatório." });
 
             await execute("account.payment", "action_post", [[Number(payment_id)]]);
+            await sincronizarPorPagamento(await faturasDoPagamento(payment_id));
             return res.status(200).json({ success: true });
         }
 
@@ -478,6 +554,16 @@ export default async function handler(req, res) {
                 return res.status(400).json({ error: "Campos obrigatórios não informados." });
             }
 
+            // A fatura fica provisória até aqui: lança agora para poder registrar o pagamento
+            const fat = await execute("account.move", "read", [[Number(order_id)]], { fields: ["state"] });
+            if (fat && fat[0] && fat[0].state === "draft") {
+                try {
+                    await execute("account.move", "action_post", [[Number(order_id)]]);
+                } catch (e) {
+                    return res.status(400).json({ error: "Não foi possível lançar a fatura para registrar o pagamento: " + e.message });
+                }
+            }
+
             const wizardId = await execute("account.payment.register", "create", [{
                 journal_id: Number(journal_id),
                 amount: Number(amount),
@@ -496,6 +582,8 @@ export default async function handler(req, res) {
                         active_ids: [Number(order_id)]
                     }
                 });
+                // Fatura paga => tranca pedido e entrega
+                try { await sincronizarBloqueioPorFatura(Number(order_id)); } catch (e) { /* melhor esforço */ }
                 return res.status(200).json({ success: true });
             } else {
                 return res.status(500).json({ error: "Não foi possível gerar o pagamento no Odoo." });
@@ -687,7 +775,7 @@ export default async function handler(req, res) {
 
         // AÇÃO: CRIAR/ATUALIZAR PEDIDO DE VENDA (E, OPCIONALMENTE, CONFIRMAR + BAIXAR ESTOQUE + FATURAR)
         if (action === "save_sale_order") {
-            const { order_id, partner_id, payment_term_id, warehouse_id, lines, confirm, removed_line_ids, date_order, invoice_date } = body;
+            const { order_id, partner_id, warehouse_id, lines, confirm, removed_line_ids, date_order, invoice_date, due_date } = body;
             // ISO (UTC) -> formato do Odoo "YYYY-MM-DD HH:MM:SS"
             let dateOrder = null;
             if (date_order) { const dt = new Date(date_order); if (!isNaN(dt)) dateOrder = dt.toISOString().slice(0, 19).replace("T", " "); }
@@ -700,7 +788,10 @@ export default async function handler(req, res) {
 
             const headerData = {
                 partner_id: Number(partner_id),
-                payment_term_id: payment_term_id ? Number(payment_term_id) : false
+                // "Condição de pagamento" fica sempre em branco; o que vale é o vencimento
+                payment_term_id: false,
+                // vencimento guardado em "Expiração" (validity_date) até virar a data de vencimento da fatura
+                validity_date: due_date || false
             };
             if (warehouse_id) headerData.warehouse_id = Number(warehouse_id);
             if (dateOrder) headerData.date_order = dateOrder;
@@ -775,6 +866,14 @@ export default async function handler(req, res) {
                     warnings.push("Não foi possível localizar a entrega gerada pelo pedido.");
                 }
 
+                // Pedido e entrega ficam DESTRAVADOS (só travam quando a fatura for paga)
+                try {
+                    await definirBloqueioEntregas(orderId, false);
+                    await definirBloqueioPedido(orderId, false);
+                } catch (e) {
+                    warnings.push("Pedido confirmado, mas não foi possível deixá-lo destravado para edição: " + e.message);
+                }
+
                 // Gera a fatura em rascunho (equivalente a escolher "Fatura normal" e "Criar Rascunho" no Odoo).
                 // A fatura NÃO é lançada automaticamente - isso é feito depois, na tela de revisão da fatura.
                 try {
@@ -785,13 +884,13 @@ export default async function handler(req, res) {
 
                         // A data da fatura é sempre o dia da operação (hoje), independente da data da venda
                         const hoje = /^\d{4}-\d{2}-\d{2}$/.test(String(invoice_date || "")) ? invoice_date : new Date(Date.now() - 4 * 3600 * 1000).toISOString().slice(0, 10);
+                        // A fatura fica PROVISÓRIA (editável) até o pagamento; ela é lançada na hora de pagar
                         try {
-                            await execute("account.move", "write", [[invoiceId], { invoice_date: hoje }]);
-                            // Lança a fatura já na hora, para que o pagamento possa ser registrado em seguida
-                            await execute("account.move", "action_post", [[invoiceId]]);
-                            invoicePosted = true;
+                            const dadosFatura = { invoice_date: hoje };
+                            if (due_date) dadosFatura.invoice_date_due = due_date;
+                            await execute("account.move", "write", [[invoiceId], dadosFatura]);
                         } catch (e) {
-                            warnings.push("Fatura criada, mas não foi possível lançá-la automaticamente: " + e.message);
+                            warnings.push("Fatura criada, mas não foi possível definir a data e o vencimento: " + e.message);
                         }
                     } else {
                         warnings.push("Pedido confirmado, mas ainda não havia nada a faturar. Use o botão \"Gerar Fatura\" no pedido depois de confirmar a entrega.");
@@ -806,7 +905,7 @@ export default async function handler(req, res) {
 
         // AÇÃO: ALTERAR UMA VENDA JÁ LANÇADA (mudar quantidade, adicionar e excluir produtos)
         if (action === "update_sale_lines") {
-            const { order_id, lines, removed_line_ids } = body;
+            const { order_id, lines, removed_line_ids, date_order, due_date, invoice_date } = body;
             if (!order_id) return res.status(400).json({ error: "ID da venda é obrigatório." });
             const oid = Number(order_id);
 
@@ -840,7 +939,16 @@ export default async function handler(req, res) {
                     }]);
                 }
             }
-            if (cmds.length === 0) return res.status(200).json({ success: true, warnings: [] });
+
+            // data da venda (só vem quando foi alterada) e vencimento
+            let dateOrder = null;
+            if (date_order) { const dt = new Date(date_order); if (!isNaN(dt)) dateOrder = dt.toISOString().slice(0, 19).replace("T", " "); }
+            const venc = (typeof due_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(due_date)) ? due_date : null;
+            const hoje = /^\d{4}-\d{2}-\d{2}$/.test(String(invoice_date || "")) ? invoice_date : new Date(Date.now() - 4 * 3600 * 1000).toISOString().slice(0, 10);
+
+            const atualVenc = await execute("sale.order", "read", [[oid]], { fields: ["validity_date"] });
+            const vencMudou = (venc || false) !== ((atualVenc && atualVenc[0] && atualVenc[0].validity_date) || false);
+            if (cmds.length === 0 && !dateOrder && !vencMudou) return res.status(200).json({ success: true, warnings: [] });
 
             // destrava o pedido e a entrega para poder editar
             try {
@@ -850,7 +958,10 @@ export default async function handler(req, res) {
 
             try {
                 // "skip_procurement" pede ao Odoo para não criar entrega nova a cada ajuste
-                await execute("sale.order", "write", [[oid], { order_line: cmds }], { context: { skip_procurement: true } });
+                const vals = { validity_date: venc || false };
+                if (dateOrder) vals.date_order = dateOrder;
+                if (cmds.length > 0) vals.order_line = cmds;
+                await execute("sale.order", "write", [[oid], vals], { context: { skip_procurement: true } });
             } catch (e) {
                 try { await sincronizarBloqueioDoPedido(oid); } catch (e2) { /* ok */ }
                 return res.status(400).json({ error: "Não foi possível alterar a venda: " + e.message });
@@ -858,12 +969,39 @@ export default async function handler(req, res) {
 
             const warnings = [];
 
-            // Mantém uma única entrega, igual ao pedido (produto e quantidade)
-            try {
-                const avisosEntrega = await sincronizarEntregaComPedido(oid);
-                avisosEntrega.forEach(a => warnings.push(a));
-            } catch (e) {
-                warnings.push("Venda alterada, mas não foi possível ajustar a entrega: " + e.message);
+            if (cmds.length > 0) {
+                // Mantém uma única entrega, igual ao pedido (produto e quantidade)
+                try {
+                    const avisosEntrega = await sincronizarEntregaComPedido(oid);
+                    avisosEntrega.forEach(a => warnings.push(a));
+                } catch (e) {
+                    warnings.push("Venda alterada, mas não foi possível ajustar a entrega: " + e.message);
+                }
+
+                // Espelha a fatura provisória com o pedido (produto, quantidade e preço)
+                try {
+                    const avisosFatura = await espelharFaturaComPedido(oid, venc, hoje);
+                    avisosFatura.forEach(a => warnings.push(a));
+                } catch (e) {
+                    warnings.push("Venda alterada, mas não foi possível ajustar a fatura: " + e.message);
+                }
+            }
+
+            // O vencimento vai para a(s) fatura(s) do pedido que não estejam canceladas
+            if (venc) {
+                try {
+                    const ped = await execute("sale.order", "read", [[oid]], { fields: ["invoice_ids"] });
+                    const ids = (ped && ped[0] && ped[0].invoice_ids) || [];
+                    if (ids.length > 0) {
+                        const faturas = await execute("account.move", "search_read", [[["id", "in", ids], ["state", "!=", "cancel"]]], { fields: ["id", "name"] });
+                        for (const f of (faturas || [])) {
+                            try { await aplicarVencimentoNaFatura(f.id, venc); }
+                            catch (e) { warnings.push("Não foi possível alterar o vencimento da fatura " + f.name + ": " + e.message); }
+                        }
+                    }
+                } catch (e) {
+                    warnings.push("Não foi possível atualizar o vencimento da fatura: " + e.message);
+                }
             }
 
             // pedido e entrega voltam a travar só se a fatura já estiver paga
@@ -1129,7 +1267,7 @@ export default async function handler(req, res) {
             // Listas de apoio vêm do cache; a lista de parceiros foi removida (o site não a usa aqui).
             const [orders, lines, paymentTerms, products, warehouses] = await Promise.all([
                 execute("sale.order", "search_read", [[["id", "=", oid]]], {
-                    fields: ["id", "name", "partner_id", "payment_term_id", "order_line", "state", "amount_total", "warehouse_id", "invoice_ids", "invoice_status", "date_order"]
+                    fields: ["id", "name", "partner_id", "payment_term_id", "order_line", "state", "amount_total", "warehouse_id", "invoice_ids", "invoice_status", "date_order", "validity_date"]
                 }),
                 execute("sale.order.line", "search_read", [[["order_id", "=", oid], ["display_type", "=", false]]], {
                     fields: ["id", "product_id", "product_uom_qty", "price_unit", "price_subtotal", "discount"]
@@ -1142,7 +1280,7 @@ export default async function handler(req, res) {
 
             const order = orders[0];
             const invoices = (order.invoice_ids && order.invoice_ids.length > 0)
-                ? await execute("account.move", "search_read", [[["id", "in", order.invoice_ids]]], { fields: ["id", "name", "state", "payment_state", "amount_total"] }).catch(() => [])
+                ? await execute("account.move", "search_read", [[["id", "in", order.invoice_ids]]], { fields: ["id", "name", "state", "payment_state", "amount_total", "invoice_date_due"] }).catch(() => [])
                 : [];
 
             return res.status(200).json({ order, lines: lines || [], payment_terms: paymentTerms || [], products: products || [], warehouses: warehouses || [], invoices: invoices || [] });
