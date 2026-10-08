@@ -1671,7 +1671,7 @@ export default async function handler(req, res) {
                 ["picking_type_id.code", "=", "internal"],
                 ["state", "=", "done"],
                 "|", ["location_id", "child_of", raiz], ["location_dest_id", "child_of", raiz]
-            ]], { fields: ["id", "name", "date_done"], order: "date_done desc, id desc", limit: Math.min(parseInt(body.limit, 10) || 30, 100) });
+            ]], { fields: ["id", "name", "date_done", "location_id", "location_dest_id"], order: "date_done desc, id desc", limit: Math.min(parseInt(body.limit, 10) || 30, 100) });
 
             let moves = [];
             if (picks && picks.length > 0) {
@@ -1683,6 +1683,8 @@ export default async function handler(req, res) {
                 id: p.id,
                 name: p.name,
                 date_done: p.date_done,
+                origin: Array.isArray(p.location_id) ? p.location_id[1] : "",
+                dest: Array.isArray(p.location_dest_id) ? p.location_dest_id[1] : "",
                 lines: (moves || []).filter(m => Array.isArray(m.picking_id) && m.picking_id[0] === p.id)
                     .map(m => ({ name: Array.isArray(m.product_id) ? m.product_id[1] : "-", qty: m.product_uom_qty }))
             }));
