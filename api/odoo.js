@@ -101,6 +101,193 @@ async function onlyExistingFields(model, vals) {
     }
 }
 
+// ---------------------------------------------------------------------
+// Bloqueio do pedido / da entrega e sincronia da entrega com o pedido (edição de vendas lançadas)
+// ---------------------------------------------------------------------
+
+// Bloqueia/desbloqueia as entregas CONCLUÍDAS de um pedido (botões "Trancar"/"Desbloquear" da entrega)
+async function definirBloqueioEntregas(orderId, bloquear) {
+    const entregas = await execute("stock.picking", "search_read", [[
+        ["sale_id", "=", Number(orderId)], ["state", "=", "done"], ["picking_type_code", "=", "outgoing"]
+    ]], { fields: ["id", "is_locked"] });
+    for (const e of (entregas || [])) {
+        if (!!e.is_locked === !!bloquear) continue;
+        try {
+            await execute("stock.picking", "write", [[e.id], { is_locked: !!bloquear }]);
+        } catch (err) {
+            await execute("stock.picking", "action_toggle_is_locked", [[e.id]]);
+        }
+    }
+}
+
+// Trava/destrava o PEDIDO DE VENDA (botões "Travar"/"Destravar" do Odoo)
+async function definirBloqueioPedido(orderId, bloquear) {
+    const oid = Number(orderId);
+    const st = await execute("sale.order", "read", [[oid]], { fields: ["state"] });
+    if (!st || !st[0] || ["cancel", "draft", "sent"].includes(st[0].state)) return;
+
+    let atual;
+    let usaCampo = true;
+    try {
+        const r = await execute("sale.order", "read", [[oid]], { fields: ["locked"] });
+        atual = !!(r && r[0] && r[0].locked);
+    } catch (e) {
+        usaCampo = false;               // Odoo mais antigo: pedido travado = estado "done"
+        atual = st[0].state === "done";
+    }
+    if (atual === !!bloquear) return;
+
+    if (usaCampo) {
+        try {
+            await execute("sale.order", "write", [[oid], { locked: !!bloquear }]);
+        } catch (e) {
+            await execute("sale.order", bloquear ? "action_lock" : "action_unlock", [[oid]]);
+        }
+    } else {
+        await execute("sale.order", bloquear ? "action_done" : "action_unlock", [[oid]]);
+    }
+}
+
+// Regra: pedido e entrega travados só quando todas as faturas (não canceladas) estão pagas
+async function sincronizarBloqueioDoPedido(orderId) {
+    const oid = Number(orderId);
+    const ped = await execute("sale.order", "read", [[oid]], { fields: ["invoice_ids", "state"] });
+    if (!ped || !ped[0] || ped[0].state === "cancel") return;
+    const ids = ped[0].invoice_ids || [];
+    const faturas = ids.length > 0
+        ? await execute("account.move", "search_read", [[["id", "in", ids], ["state", "!=", "cancel"]]], { fields: ["id", "payment_state"] })
+        : [];
+    const pago = (faturas || []).length > 0 && faturas.every(f => f.payment_state === "paid" || f.payment_state === "in_payment");
+    await definirBloqueioEntregas(oid, pago);
+    await definirBloqueioPedido(oid, pago);
+}
+
+// Valida um picking e responde às janelas de confirmação do Odoo (ex.: criar pendência)
+async function validarPickingComAssistentes(pickingId) {
+    const vr = await execute("stock.picking", "button_validate", [[Number(pickingId)]], { context: { skip_sms: true } });
+    if (vr && typeof vr === "object" && vr.res_model) {
+        const wctx = Object.assign({}, vr.context || {}, { skip_sms: true });
+        const wid = await execute(vr.res_model, "create", [{}], { context: wctx });
+        const metodo = vr.res_model === "stock.backorder.confirmation" ? "process_cancel_backorder" : "process";
+        await execute(vr.res_model, metodo, [[wid]], { context: wctx });
+    }
+}
+
+// Mantém UMA ÚNICA entrega por pedido, sempre igual às linhas do pedido (produto e quantidade)
+async function sincronizarEntregaComPedido(orderId) {
+    const oid = Number(orderId);
+    const avisos = [];
+
+    // 1) cancela entregas extras pendentes (o Odoo cria uma a cada aumento/produto novo)
+    const pendentes = await execute("stock.picking", "search_read", [[
+        ["sale_id", "=", oid], ["picking_type_code", "=", "outgoing"], ["state", "not in", ["done", "cancel"]]
+    ]], { fields: ["id", "name"] });
+    for (const p of (pendentes || [])) {
+        try {
+            await execute("stock.picking", "action_cancel", [[p.id]]);
+        } catch (e) {
+            avisos.push("Não foi possível cancelar a entrega extra " + p.name + ": " + e.message);
+        }
+    }
+
+    // 2) entrega principal (a concluída mais antiga)
+    const feitas = await execute("stock.picking", "search_read", [[
+        ["sale_id", "=", oid], ["picking_type_code", "=", "outgoing"], ["state", "=", "done"]
+    ]], { fields: ["id", "name", "location_id", "location_dest_id", "picking_type_id"], order: "id asc" }).catch(() => []);
+    if (!feitas || feitas.length === 0) {
+        avisos.push("A venda não tem entrega concluída para ajustar. Confira a entrega no Odoo.");
+        return avisos;
+    }
+    const principal = feitas[0];
+    if (feitas.length > 1) avisos.push("Esta venda tem mais de uma entrega concluída; só a " + principal.name + " foi ajustada.");
+    try { await definirBloqueioEntregas(oid, false); } catch (e) { /* segue mesmo assim */ }
+
+    const linhas = await execute("sale.order.line", "search_read", [[["order_id", "=", oid], ["display_type", "=", false]]], { fields: ["id", "product_id", "product_uom_qty"] });
+    const movimentos = await execute("stock.move", "search_read", [[["picking_id", "=", principal.id], ["state", "!=", "cancel"]]], { fields: ["id", "product_id", "product_uom_qty", "quantity", "state", "sale_line_id"] });
+
+    const idsLinhas = (linhas || []).map(l => l.id);
+    const novas = [];
+
+    for (const l of (linhas || [])) {
+        const qtd = Number(l.product_uom_qty);
+        const mv = (movimentos || []).find(m => Array.isArray(m.sale_line_id) && m.sale_line_id[0] === l.id);
+        const nomeProd = Array.isArray(l.product_id) ? l.product_id[1] : "";
+        if (!mv) { novas.push(l); continue; }
+        if (Number(mv.product_uom_qty) === qtd && Number(mv.quantity) === qtd) continue;
+        try {
+            try {
+                await execute("stock.move", "write", [[mv.id], { product_uom_qty: qtd, quantity: qtd }]);
+            } catch (e1) {
+                await execute("stock.move", "write", [[mv.id], { product_uom_qty: qtd }]);
+                await execute("stock.move", "write", [[mv.id], { quantity: qtd }]);
+            }
+        } catch (e) {
+            avisos.push("Não foi possível ajustar a quantidade de " + nomeProd + " na entrega: " + e.message);
+        }
+    }
+
+    // produtos que saíram do pedido: retira da entrega (ou zera, se o Odoo não deixar excluir)
+    const orfaos = (movimentos || []).filter(m => !(Array.isArray(m.sale_line_id) && idsLinhas.includes(m.sale_line_id[0])));
+    for (const m of orfaos) {
+        const nome = Array.isArray(m.product_id) ? m.product_id[1] : "";
+        try {
+            await execute("stock.move", "unlink", [[m.id]]);
+        } catch (e1) {
+            try {
+                await execute("stock.move", "write", [[m.id], { product_uom_qty: 0, quantity: 0 }]);
+            } catch (e2) {
+                avisos.push("Não foi possível retirar " + nome + " da entrega: " + e2.message);
+            }
+        }
+    }
+
+    // produtos novos no pedido: entram na MESMA entrega
+    if (novas.length > 0) {
+        try {
+            const locOrigem = Array.isArray(principal.location_id) ? principal.location_id[0] : principal.location_id;
+            const locDestino = Array.isArray(principal.location_dest_id) ? principal.location_dest_id[0] : principal.location_dest_id;
+            const tipoId = Array.isArray(principal.picking_type_id) ? principal.picking_type_id[0] : principal.picking_type_id;
+            const novosIds = [];
+            for (const l of novas) {
+                const prodId = Array.isArray(l.product_id) ? l.product_id[0] : l.product_id;
+                const prod = await execute("product.product", "read", [[prodId]], { fields: ["uom_id", "display_name"] });
+                const uom = prod && prod[0] && Array.isArray(prod[0].uom_id) ? prod[0].uom_id[0] : null;
+                const vals = await onlyExistingFields("stock.move", {
+                    picking_id: principal.id,
+                    product_id: prodId,
+                    product_uom_qty: Number(l.product_uom_qty),
+                    product_uom: uom,
+                    uom_id: uom,
+                    name: prod && prod[0] ? prod[0].display_name : "",
+                    location_id: locOrigem,
+                    location_dest_id: locDestino,
+                    picking_type_id: tipoId,
+                    sale_line_id: l.id
+                });
+                novosIds.push(await execute("stock.move", "create", [vals]));
+            }
+            await execute("stock.picking", "action_confirm", [[principal.id]]);
+            await execute("stock.picking", "action_assign", [[principal.id]]).catch(() => {});
+            for (const mid of novosIds) {
+                const dem = await execute("stock.move", "read", [[mid]], { fields: ["product_uom_qty"] });
+                const q = dem && dem[0] ? dem[0].product_uom_qty : 0;
+                try {
+                    await execute("stock.move", "write", [[mid], { quantity: q }]);
+                } catch (e2) {
+                    await execute("stock.move", "write", [[mid], { quantity_done: q }]).catch(() => {});
+                }
+            }
+            await validarPickingComAssistentes(principal.id);
+        } catch (e) {
+            avisos.push("Não foi possível incluir os produtos novos na entrega: " + e.message);
+        }
+    }
+
+    // a validação pode ter trancado a entrega de novo
+    try { await definirBloqueioEntregas(oid, false); } catch (e) { /* ok */ }
+    return avisos;
+}
+
 export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -617,6 +804,84 @@ export default async function handler(req, res) {
             return res.status(200).json({ success: true, id: orderId, invoice_id: invoiceId, invoice_posted: invoicePosted, warnings });
         }
 
+        // AÇÃO: ALTERAR UMA VENDA JÁ LANÇADA (mudar quantidade, adicionar e excluir produtos)
+        if (action === "update_sale_lines") {
+            const { order_id, lines, removed_line_ids } = body;
+            if (!order_id) return res.status(400).json({ error: "ID da venda é obrigatório." });
+            const oid = Number(order_id);
+
+            const st = await execute("sale.order", "read", [[oid]], { fields: ["state"] });
+            if (!st || !st[0] || !["sale", "done"].includes(st[0].state)) {
+                return res.status(400).json({ error: "Só é possível alterar vendas já lançadas." });
+            }
+
+            const validas = (lines || []).filter(l => l.product_id && Number(l.qty) > 0);
+            if (validas.length === 0) {
+                return res.status(400).json({ error: "A venda precisa ter ao menos um produto. Para desfazê-la, cancele a venda." });
+            }
+
+            // linhas atuais: só escreve quantidade nas linhas que realmente mudaram
+            const atuais = await execute("sale.order.line", "search_read", [[["order_id", "=", oid], ["display_type", "=", false]]], { fields: ["id", "product_uom_qty"] });
+            const qtdAtual = {};
+            (atuais || []).forEach(l => { qtdAtual[l.id] = l.product_uom_qty; });
+
+            const cmds = [];
+            for (const rid of (removed_line_ids || [])) cmds.push([2, Number(rid), 0]);
+            for (const l of validas) {
+                if (l.id) {
+                    const nova = Number(l.qty);
+                    if (qtdAtual[Number(l.id)] !== nova) cmds.push([1, Number(l.id), { product_uom_qty: nova }]);
+                } else {
+                    cmds.push([0, 0, {
+                        product_id: Number(l.product_id),
+                        product_uom_qty: Number(l.qty),
+                        price_unit: Number(l.price),
+                        discount: Number(l.discount) || 0
+                    }]);
+                }
+            }
+            if (cmds.length === 0) return res.status(200).json({ success: true, warnings: [] });
+
+            // destrava o pedido e a entrega para poder editar
+            try {
+                await definirBloqueioPedido(oid, false);
+                await definirBloqueioEntregas(oid, false);
+            } catch (e) { /* tenta editar mesmo assim */ }
+
+            try {
+                // "skip_procurement" pede ao Odoo para não criar entrega nova a cada ajuste
+                await execute("sale.order", "write", [[oid], { order_line: cmds }], { context: { skip_procurement: true } });
+            } catch (e) {
+                try { await sincronizarBloqueioDoPedido(oid); } catch (e2) { /* ok */ }
+                return res.status(400).json({ error: "Não foi possível alterar a venda: " + e.message });
+            }
+
+            const warnings = [];
+
+            // Mantém uma única entrega, igual ao pedido (produto e quantidade)
+            try {
+                const avisosEntrega = await sincronizarEntregaComPedido(oid);
+                avisosEntrega.forEach(a => warnings.push(a));
+            } catch (e) {
+                warnings.push("Venda alterada, mas não foi possível ajustar a entrega: " + e.message);
+            }
+
+            // pedido e entrega voltam a travar só se a fatura já estiver paga
+            try { await sincronizarBloqueioDoPedido(oid); } catch (e) { /* ok */ }
+
+            // avisa o que ainda não acompanha o pedido
+            try {
+                const depois = await execute("sale.order.line", "search_read", [[["order_id", "=", oid], ["display_type", "=", false]]], { fields: ["product_id", "product_uom_qty", "qty_delivered", "qty_invoiced"] });
+                const nome = l => (Array.isArray(l.product_id) ? l.product_id[1] : "");
+                const difEntrega = (depois || []).filter(l => Number(l.qty_delivered) !== Number(l.product_uom_qty));
+                const difFatura = (depois || []).filter(l => Number(l.qty_invoiced) !== Number(l.product_uom_qty));
+                if (difEntrega.length > 0) warnings.push("A entrega ainda não acompanha: " + difEntrega.map(l => nome(l) + " (pedido " + l.product_uom_qty + ", entregue " + l.qty_delivered + ")").join("; ") + ".");
+                if (difFatura.length > 0) warnings.push("A fatura ainda não acompanha: " + difFatura.map(l => nome(l) + " (pedido " + l.product_uom_qty + ", faturado " + l.qty_invoiced + ")").join("; ") + ". Ajuste a fatura.");
+            } catch (e) { /* aviso é só informativo */ }
+
+            return res.status(200).json({ success: true, warnings });
+        }
+
         // AÇÃO: GERAR A FATURA (RASCUNHO) DE UM PEDIDO JÁ CONFIRMADO (CASO AINDA NÃO TENHA FATURA)
         if (action === "create_sale_invoice") {
             const { order_id } = body;
@@ -864,10 +1129,10 @@ export default async function handler(req, res) {
             // Listas de apoio vêm do cache; a lista de parceiros foi removida (o site não a usa aqui).
             const [orders, lines, paymentTerms, products, warehouses] = await Promise.all([
                 execute("sale.order", "search_read", [[["id", "=", oid]]], {
-                    fields: ["id", "name", "partner_id", "payment_term_id", "order_line", "state", "amount_total", "warehouse_id", "invoice_ids", "invoice_status"]
+                    fields: ["id", "name", "partner_id", "payment_term_id", "order_line", "state", "amount_total", "warehouse_id", "invoice_ids", "invoice_status", "date_order"]
                 }),
                 execute("sale.order.line", "search_read", [[["order_id", "=", oid], ["display_type", "=", false]]], {
-                    fields: ["id", "product_id", "product_uom_qty", "price_unit", "price_subtotal"]
+                    fields: ["id", "product_id", "product_uom_qty", "price_unit", "price_subtotal", "discount"]
                 }).catch(() => []),
                 lookups.paymentTerms().catch(() => []),
                 lookups.saleProducts().catch(() => []),
