@@ -253,6 +253,55 @@ input[disabled] { background: #f0f0f0; color: #555; }
 .modal .acoes { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
 .modal .acoes .btn { width: auto; margin-top: 0; padding: 12px 18px; font-size: 15px; }
 
+/* ===== Marca "INTEGRADOR" na tela inicial ===== */
+header.bar { overflow: hidden; }
+header.bar.is-home {
+    background: linear-gradient(120deg, #4a2f43 0%, #714B67 35%, #9a6a8d 55%, #714B67 75%, #4a2f43 100%);
+    background-size: 260% 100%;
+    animation: hdrFlow 9s ease-in-out infinite alternate;
+}
+header.bar.is-home::after {
+    content: ''; position: absolute; top: 0; bottom: 0; left: -90px; width: 60px; pointer-events: none;
+    background: linear-gradient(100deg, transparent, rgba(255,255,255,.22), transparent);
+    transform: skewX(-20deg); animation: hdrSweep 6s ease-in-out infinite;
+}
+.brand {
+    display: inline-flex; align-items: center; gap: 10px; font-size: 21px; font-weight: 800;
+    letter-spacing: .26em; text-transform: uppercase; line-height: 1.1;
+}
+.brand .brand-txt {
+    background: linear-gradient(90deg, #fff 0%, #f7d8ef 25%, #fff 50%, #f7d8ef 75%, #fff 100%);
+    background-size: 200% 100%; -webkit-background-clip: text; background-clip: text;
+    color: transparent; -webkit-text-fill-color: transparent;
+    animation: brandShine 3.5s linear infinite; filter: drop-shadow(0 0 8px rgba(255,255,255,.35));
+}
+.brand .brand-dot {
+    width: 10px; height: 10px; border-radius: 50%; background: #ffd6f3; flex: none;
+    box-shadow: 0 0 10px 2px rgba(255,214,243,.8); animation: brandPulse 2.2s ease-in-out infinite;
+}
+@keyframes hdrFlow { from { background-position: 0% 0; } to { background-position: 100% 0; } }
+@keyframes hdrSweep { 0%, 55% { left: -90px; } 100% { left: 115%; } }
+@keyframes brandShine { from { background-position: 200% 0; } to { background-position: 0% 0; } }
+@keyframes brandPulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(.65); opacity: .6; } }
+@media (prefers-reduced-motion: reduce) {
+    header.bar.is-home, header.bar.is-home::after, .brand .brand-txt, .brand .brand-dot { animation: none; }
+}
+
+/* ===== Pop-up de confirmação no visual do site ===== */
+#cfBg { z-index: 60; background: rgba(40,20,36,.55); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+#cfBg.show .modal { animation: cfPop .22s ease-out; }
+@keyframes cfPop { from { opacity: 0; transform: translateY(14px) scale(.94); } to { opacity: 1; transform: none; } }
+.modal.cf { text-align: center; padding: 26px 22px 20px; box-shadow: 0 18px 50px rgba(0,0,0,.3); }
+.cf-ico { width: 62px; height: 62px; margin: 0 auto 12px; border-radius: 50%; background: #f4eef2; display: flex; align-items: center; justify-content: center; font-size: 30px; }
+.modal.cf h2 { font-size: 20px; margin-bottom: 8px; }
+.modal.cf p { font-size: 15px; line-height: 1.5; color: #555; }
+.modal.cf p b { color: var(--primary); }
+.modal.cf .acoes { justify-content: center; }
+.modal.cf .acoes .btn { flex: 1; }
+.modal.cf.perigo .cf-ico { background: #ffebee; }
+.modal.cf.perigo h2, .modal.cf.perigo p b { color: var(--danger); }
+.modal.cf.perigo #cfSim { background: var(--danger); }
+
 /* Seletor de local */
 .sheet-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 40; align-items: flex-end; justify-content: center; }
 .sheet-bg.show { display: flex; }
@@ -478,6 +527,19 @@ input[disabled] { background: #f0f0f0; color: #555; }
     </div>
 </div>
 
+<!-- Confirmação (substitui o confirm() cru do navegador) -->
+<div class="modal-bg" id="cfBg">
+    <div class="modal cf" id="cfBox" role="dialog" aria-modal="true" aria-labelledby="cfTitulo">
+        <div class="cf-ico" id="cfIco">❔</div>
+        <h2 id="cfTitulo"></h2>
+        <p id="cfMsg"></p>
+        <div class="acoes">
+            <button class="btn sec" id="cfNao" type="button">Cancelar</button>
+            <button class="btn" id="cfSim" type="button">Continuar</button>
+        </div>
+    </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -497,6 +559,32 @@ function dataCurta(v) {
     const d = new Date(String(v).replace(' ', 'T') + 'Z');
     return isNaN(d) ? '-' : d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
+
+// Pop-up de confirmação no visual do site. Retorna Promise<boolean>. `msg` aceita HTML (já escapado por quem chama).
+let cfResolve = null;
+function confirmar({ icone = '❔', titulo = 'Confirmar', msg = '', ok = 'Continuar', cancelar = 'Cancelar', perigo = false } = {}) {
+    return new Promise(resolve => {
+        if (cfResolve) cfResolve(false);
+        cfResolve = resolve;
+        $('cfIco').textContent = icone;
+        $('cfTitulo').textContent = titulo;
+        $('cfMsg').innerHTML = msg;
+        $('cfSim').textContent = ok;
+        $('cfNao').textContent = cancelar;
+        $('cfBox').classList.toggle('perigo', !!perigo);
+        $('cfBg').classList.add('show');
+        setTimeout(() => $('cfSim').focus(), 30);
+    });
+}
+function fecharConfirmar(v) {
+    $('cfBg').classList.remove('show');
+    const r = cfResolve; cfResolve = null;
+    if (r) r(v);
+}
+$('cfSim').addEventListener('click', () => fecharConfirmar(true));
+$('cfNao').addEventListener('click', () => fecharConfirmar(false));
+$('cfBg').addEventListener('click', e => { if (e.target === $('cfBg')) fecharConfirmar(false); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && cfResolve) fecharConfirmar(false); });
 
 let toastTimer;
 function toast(msg, tipo) {
@@ -601,7 +689,9 @@ function ir(tela) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     $(tela).classList.add('active');
     const home = tela === 'home';
-    $('titulo').textContent = (tela === 'novaVenda' && venda && venda.editId) ? ('Venda ' + venda.nome) : TITULOS[tela];
+    document.querySelector('header.bar').classList.toggle('is-home', home);
+    if (home) $('titulo').innerHTML = '<span class="brand"><span class="brand-dot"></span><span class="brand-txt">Integrador</span></span>';
+    else $('titulo').textContent = (tela === 'novaVenda' && venda && venda.editId) ? ('Venda ' + venda.nome) : TITULOS[tela];
     // status atual da venda ao lado do número
     if (tela === 'novaVenda' && venda && venda.editId) {
         const s = venda.estado;
@@ -1298,7 +1388,10 @@ async function pagarVendaAtual() {
 
 async function cancelarVendaAtual() {
     if (!venda || !venda.editId || venda.travada) return;
-    if (!confirm('Cancelar a venda ' + (venda.nome || '') + '?\n\nOs itens voltam para o estoque e a fatura provisória é cancelada.')) return;
+    if (!(await confirmar({
+        icone: '🗑️', titulo: 'Cancelar venda?', perigo: true, ok: 'Cancelar venda', cancelar: 'Voltar',
+        msg: 'Cancelar a venda <b>' + esc(venda.nome || '') + '</b>?<br>Os itens voltam para o estoque e a fatura provisória é cancelada.'
+    }))) return;
     const btn = $('btnCancelarVenda');
     btn.disabled = true;
     const txt = btn.textContent;
@@ -1405,7 +1498,11 @@ async function salvarVenda(confirmar) {
 
     // Sem cliente: avisa e usa o cliente padrão "CLIENTE" (já cadastrado no Odoo), para o campo não ficar em branco
     if (!venda.partner) {
-        if (!confirm('Nenhum cliente foi informado.\n\nA venda será lançada com o cliente "CLIENTE". Deseja continuar?')) return;
+        if (!(await confirmar({
+            icone: '👤', titulo: 'Nenhum cliente informado',
+            msg: 'A venda será lançada com o cliente <b>CLIENTE</b>, para o campo não ficar em branco.<br>Deseja continuar?',
+            ok: 'Continuar', cancelar: 'Voltar'
+        }))) return;
         const dc = await api('search_partners', { query: 'CLIENTE', exact: true });
         const padrao = (dc.partners || []).find(p => String(p.name).trim().toUpperCase() === 'CLIENTE');
         if (!padrao) return toast('Não encontrei o cliente "CLIENTE" no Odoo. Selecione um cliente.', 'err');
