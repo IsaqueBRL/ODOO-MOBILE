@@ -75,6 +75,13 @@ input[disabled] { background: #f0f0f0; color: #555; }
 .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .card .t { font-weight: 700; font-size: 15px; }
 .card .s { font-size: 13px; color: var(--muted); margin-top: 3px; }
+.card .cli { font-size: 17px; font-weight: 800; color: var(--text); }
+.card .dt { font-size: 14px; color: #555; margin-top: 3px; }
+.card .num { font-size: 12px; color: #9a9aa5; margin-top: 3px; }
+.resumo-dia { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+.resumo-dia .rd { background: #fff; border: 1px solid var(--border); border-radius: 14px; padding: 14px 8px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,.04); }
+.resumo-dia .rd b { display: block; font-size: 22px; font-weight: 800; color: var(--primary); }
+.resumo-dia .rd span { font-size: 13px; color: var(--muted); }
 .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .b-ok { background: #e8f5e9; color: var(--ok); }
 .b-warn { background: #fff3e0; color: var(--warn); }
@@ -322,9 +329,14 @@ input[disabled] { background: #f0f0f0; color: #555; }
 
 <!-- VENDAS -->
 <section class="screen" id="vendas">
+    <div class="resumo-dia">
+        <div class="rd"><b id="resVendido">R$ 0,00</b><span>Faturado hoje</span></div>
+        <div class="rd"><b id="resQtd">0</b><span>Vendas hoje</span></div>
+    </div>
  <input type="text" id="venBusca" placeholder="Número do pedido ou cliente..." oninput="debounce('ven', () => carregarVendas(true))">
     <div class="chips">
-        <button class="chip" data-st="all" onclick="escolherStatus('all')">Últimas</button>
+        <button class="chip" data-st="last" onclick="escolherStatus('last')">Últimas</button>
+        <button class="chip" data-st="all" onclick="escolherStatus('all')">Todas</button>
         <button class="chip" data-st="draft" onclick="escolherStatus('draft')">Orçamentos</button>
         <button class="chip" data-st="sale" onclick="escolherStatus('sale')">Confirmadas</button>
         <button class="chip" data-st="cancel" onclick="escolherStatus('cancel')">Canceladas</button>
@@ -453,6 +465,12 @@ function dataHora(v) {
     return isNaN(d) ? '-' : d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+function dataCurta(v) {
+    if (!v) return '-';
+    const d = new Date(String(v).replace(' ', 'T') + 'Z');
+    return isNaN(d) ? '-' : d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
 let toastTimer;
 function toast(msg, tipo) {
     const t = $('toast');
@@ -544,7 +562,7 @@ function escolherLocal(id) {
         const tela = pilha[pilha.length - 1];
         if (tela === 'novaVenda' && venda) carregarProdutosDoLocal();       // trocou o local no meio da venda
         else if (tela === 'estoque') buscarEstoque();
-        else if (tela === 'vendas' && (venStatus || $('venBusca').value.trim())) carregarVendas();
+        else if (tela === 'vendas') { carregarVendas(); carregarResumoDia(); }
     }
 }
 
@@ -855,12 +873,22 @@ async function salvarTransferencia() {
 let venStatus = null, venReq = 0;
 
 function abrirVendas() {
-    venStatus = null;
     $('venBusca').value = '';
-    document.querySelectorAll('#vendas .chip').forEach(c => c.classList.remove('on'));
     $('venLista').innerHTML = '';
-    $('venStatus').textContent = 'Escolha "Últimas", um status ou digite para pesquisar.';
     abrir('vendas');
+    escolherStatus('last');   // "Últimas" sempre ativado ao abrir
+    carregarResumoDia();
+}
+
+// Cards do topo: valor vendido e quantidade de vendas confirmadas HOJE (no local escolhido)
+async function carregarResumoDia() {
+    const ini = new Date(); ini.setHours(0, 0, 0, 0);
+    const fim = new Date(ini); fim.setDate(fim.getDate() + 1);
+    const d = await api('get_sales_summary', { warehouse_id: meuLocal ? meuLocal.wh.id : '', date_from: ini.toISOString(), date_to: fim.toISOString() });
+    if (d && d.total !== undefined) {
+        $('resVendido').textContent = brl(d.total);
+        $('resQtd').textContent = d.count;
+    }
 }
 
 function escolherStatus(st) {
@@ -872,13 +900,11 @@ function escolherStatus(st) {
 async function carregarVendas() {
     const query = $('venBusca').value.trim();
     const req = ++venReq;
-    if (!query && !venStatus) {
-        $('venLista').innerHTML = '';
-        $('venStatus').textContent = 'Escolha "Últimas", um status ou digite para pesquisar.';
-        return;
-    }
+    if (!venStatus) venStatus = 'last';
     $('venStatus').textContent = 'Carregando...';
-    const d = await api('get_sales', { query, warehouse_id: meuLocal ? meuLocal.wh.id : '', order_status: (venStatus && venStatus !== 'all') ? venStatus : '' });
+    // Últimas = 10 mais recentes (ao pesquisar, mostra até 100); Todas = todas as vendas
+    const limite = venStatus === 'last' ? (query ? 100 : 10) : (venStatus === 'all' ? 1000 : 100);
+    const d = await api('get_sales', { query, limit: limite, warehouse_id: meuLocal ? meuLocal.wh.id : '', order_status: (venStatus === 'last' || venStatus === 'all') ? '' : venStatus });
     if (req !== venReq) return;
     if (!d.result) { $('venStatus').textContent = d.error || 'Erro ao carregar vendas.'; return; }
     if (d.result.length === 0) { $('venLista').innerHTML = ''; $('venStatus').textContent = 'Nenhuma venda encontrada.'; return; }
@@ -893,9 +919,9 @@ async function carregarVendas() {
 
     $('venLista').innerHTML = d.result.map(o => `
         <div class="card"${(o.state === 'sale' || o.state === 'done') ? ` onclick="abrirEdicaoVenda(${o.id})" style="cursor:pointer"` : ''}>
-            <div class="row"><div class="t">${esc(o.name)}</div><div class="money">${brl(o.amount_total)}</div></div>
-            <div class="s">${esc(Array.isArray(o.partner_id) ? o.partner_id[1] : '-')}</div>
-            <div class="s">${dataHora(o.date_order)}</div>
+            <div class="row"><div class="cli">${esc(Array.isArray(o.partner_id) ? o.partner_id[1] : '-')}</div><div class="money">${brl(o.amount_total)}</div></div>
+            <div class="dt">${dataCurta(o.date_order)}</div>
+            <div class="num">${esc(o.name)}</div>
             <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap">${stBadge(o.state)} ${o.state !== 'cancel' ? pgBadge(o.payment_summary) : ''}</div>
         </div>`).join('');
 }
@@ -1113,7 +1139,8 @@ function voltarParaVendas() {
     pilha = ['home', 'vendas'];
     ir('vendas');
     $('venBusca').value = '';
-    escolherStatus('all');
+    escolherStatus('last');
+    carregarResumoDia();
 }
 
 /* ============ Editar venda já lançada ============ */
