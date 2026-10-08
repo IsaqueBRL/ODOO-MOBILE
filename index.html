@@ -141,6 +141,9 @@ input[disabled] { background: #f0f0f0; color: #555; }
 
 
 /* Data compacta e desconto por item */
+.datas-row { display: flex; gap: 12px; }
+.datas-row > div { flex: 1; min-width: 0; }
+.datas-row .in-data { width: 100%; max-width: none; }
 .dsc-fixo { padding: 10px 0; font-weight: 700; color: #555; font-size: 14px; }
 .in-data { width: auto; max-width: 170px; padding: 8px 10px; font-size: 14px; border-radius: 10px; }
 .line .sub { text-align: right; font-weight: 800; font-size: 15px; margin-left: auto; line-height: 1.15; }
@@ -330,8 +333,16 @@ input[disabled] { background: #f0f0f0; color: #555; }
     <label class="f" style="margin-top:0">Cliente *</label>
     <div id="nvClienteBox"></div>
 
-    <label class="f" for="nvData">Data da venda</label>
-    <input type="date" id="nvData" class="in-data" onchange="venda.data = this.value">
+    <div class="datas-row">
+        <div>
+            <label class="f" for="nvData">Data da venda</label>
+            <input type="date" id="nvData" class="in-data" onchange="venda.data = this.value">
+        </div>
+        <div>
+            <label class="f" for="nvVenc">Vencimento</label>
+            <input type="date" id="nvVenc" class="in-data" onchange="venda.venc = this.value">
+        </div>
+    </div>
 
     <div id="nvLinhas"></div>
 
@@ -895,8 +906,9 @@ function abrirNovaVenda() {
 }
 
 async function iniciarNovaVenda() {
-    venda = { partner: null, warehouse: String(meuLocal.wh.id), produtos: [], linhas: [], data: dataLocalAgora().slice(0, 10) };
+    venda = { partner: null, warehouse: String(meuLocal.wh.id), produtos: [], linhas: [], data: dataLocalAgora().slice(0, 10), venc: dataLocalAgora().slice(0, 10) };
     $('nvData').value = venda.data;
+    $('nvVenc').value = venda.venc;
     aplicarModoTelaVenda();
     fecharListaProdutos();
     renderCliente();
@@ -1091,7 +1103,8 @@ function voltarParaVendas() {
 // Ajusta a tela "Nova venda" para o modo edição (e volta ao normal numa venda nova)
 function aplicarModoTelaVenda() {
     const editando = !!(venda && venda.editId);
-    $('nvData').disabled = editando;
+    $('nvData').disabled = false;
+    $('nvVenc').disabled = false;
     $('btnOrcamento').style.display = editando ? 'none' : '';
     $('btnConfirmarVenda').textContent = editando ? 'Salvar alterações' : 'Salvar';
 }
@@ -1107,6 +1120,8 @@ async function abrirEdicaoVenda(id) {
     if (new Set(prodIds).size !== prodIds.length) return toast('Esta venda tem o mesmo produto em mais de uma linha. Edite-a pelo computador.', 'err');
     if (!Array.isArray(o.warehouse_id)) return toast('A venda não tem local de estoque definido.', 'err');
 
+    const faturaAtiva = (d.invoices || []).find(i => i.state !== 'cancel');
+    const vencAtual = (faturaAtiva && faturaAtiva.invoice_date_due) || o.validity_date || '';
     const dt = new Date(String(o.date_order || '').replace(' ', 'T') + 'Z');
     const p2 = n => String(n).padStart(2, '0');
     venda = {
@@ -1117,6 +1132,7 @@ async function abrirEdicaoVenda(id) {
         produtos: [],
         removidos: [],
         data: isNaN(dt) ? '' : dt.getFullYear() + '-' + p2(dt.getMonth() + 1) + '-' + p2(dt.getDate()),
+        venc: vencAtual,
         linhas: linhasOdoo.map(l => ({
             id: l.product_id[0], lineId: l.id, nome: l.product_id[1],
             qty: l.product_uom_qty, qtyOrig: l.product_uom_qty,
@@ -1124,7 +1140,9 @@ async function abrirEdicaoVenda(id) {
             discTipo: '%', discVal: l.discount || 0
         }))
     };
+    venda.dataOrig = venda.data;
     $('nvData').value = venda.data;
+    $('nvVenc').value = venda.venc;
     aplicarModoTelaVenda();
     fecharListaProdutos();
     renderCliente();
@@ -1135,12 +1153,22 @@ async function abrirEdicaoVenda(id) {
 
 async function salvarEdicaoVenda() {
     if (venda.linhas.length === 0) return toast('A venda precisa ter ao menos um produto. Para desfazê-la, cancele a venda.', 'err');
+    if (!venda.data) return toast('Informe a data da venda.', 'err');
+    // a data só é enviada se foi alterada; vai às 12:00 (hora mais segura contra mudança de dia por fuso)
+    let dateOrder;
+    if (venda.data !== venda.dataOrig) {
+        const [y, m, dd] = venda.data.split('-').map(Number);
+        dateOrder = new Date(y, m - 1, dd, 12, 0).toISOString();
+    }
     const btn = $('btnConfirmarVenda');
     const txt = btn.textContent;
     btn.disabled = true;
     btn.textContent = 'Salvando...';
     const d = await api('update_sale_lines', {
         order_id: venda.editId,
+        date_order: dateOrder,
+        due_date: venda.venc || null,
+        invoice_date: dataLocalAgora().slice(0, 10),
         lines: venda.linhas.map(l => ({ id: l.lineId || null, product_id: l.id, qty: l.qty, price: l.price, discount: Number(pctDesc(l).toFixed(4)) })),
         removed_line_ids: venda.removidos || []
     });
@@ -1223,6 +1251,7 @@ async function salvarVenda(confirmar) {
         lines: venda.linhas.map(l => ({ product_id: l.id, qty: l.qty, price: l.price, discount: Number(pctDesc(l).toFixed(4)) })),
         date_order: dataVendaISO(),
         invoice_date: dataLocalAgora().slice(0, 10),
+        due_date: venda.venc || null,
         confirm: confirmar
     });
 
@@ -1233,8 +1262,8 @@ async function salvarVenda(confirmar) {
         const avisos = (d.warnings || []).join(' ');
         toast(confirmar ? ('Venda lançada!' + (avisos ? ' ' + avisos : '')) : 'Rascunho salvo!', avisos ? 'err' : 'ok');
         const total = venda.linhas.reduce((s, l) => s + totalLinha(l), 0);
-        if (confirmar && d.invoice_id && d.invoice_posted) {
-            // fatura já criada e lançada: abre direto o pagamento
+        if (confirmar && d.invoice_id) {
+            // fatura criada (provisória até o pagamento): abre direto o pagamento
             await abrirPagamento(d.invoice_id, total);
         } else {
             voltarParaVendas();
