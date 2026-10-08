@@ -975,15 +975,26 @@ export default async function handler(req, res) {
                 return res.status(400).json({ error: "Só é possível alterar vendas já lançadas." });
             }
 
+            // Fatura paga = venda travada (só edita depois de desfazer o pagamento)
+            const pedPag = await execute("sale.order", "read", [[oid]], { fields: ["invoice_ids"] });
+            const idsFat = (pedPag && pedPag[0] && pedPag[0].invoice_ids) || [];
+            if (idsFat.length > 0) {
+                const pagas = await execute("account.move", "search_read", [[["id", "in", idsFat], ["state", "!=", "cancel"], ["payment_state", "in", ["paid", "in_payment", "partial"]]]], { fields: ["name"] });
+                if (pagas && pagas.length > 0) {
+                    return res.status(400).json({ error: "A fatura " + pagas.map(f => f.name).join(", ") + " já está paga: a venda está travada. Desfaça o pagamento para editar." });
+                }
+            }
+
             const validas = (lines || []).filter(l => l.product_id && Number(l.qty) > 0);
             if (validas.length === 0) {
                 return res.status(400).json({ error: "A venda precisa ter ao menos um produto. Para desfazê-la, cancele a venda." });
             }
 
             // linhas atuais: só escreve quantidade nas linhas que realmente mudaram
-            const atuais = await execute("sale.order.line", "search_read", [[["order_id", "=", oid], ["display_type", "=", false]]], { fields: ["id", "product_uom_qty"] });
+            const atuais = await execute("sale.order.line", "search_read", [[["order_id", "=", oid], ["display_type", "=", false]]], { fields: ["id", "product_uom_qty", "discount"] });
             const qtdAtual = {};
-            (atuais || []).forEach(l => { qtdAtual[l.id] = l.product_uom_qty; });
+            const descAtual = {};
+            (atuais || []).forEach(l => { qtdAtual[l.id] = l.product_uom_qty; descAtual[l.id] = Number(l.discount) || 0; });
 
             const cmds = [];
             const reducoes = [];
@@ -991,10 +1002,14 @@ export default async function handler(req, res) {
             for (const l of validas) {
                 if (l.id) {
                     const nova = Number(l.qty);
+                    const novoDesc = Math.min(100, Math.max(0, Number(l.discount) || 0));
+                    const vals = {};
                     if (qtdAtual[Number(l.id)] !== nova) {
-                        cmds.push([1, Number(l.id), { product_uom_qty: nova }]);
+                        vals.product_uom_qty = nova;
                         if (nova < qtdAtual[Number(l.id)]) reducoes.push({ lineId: Number(l.id), qty: nova });
                     }
+                    if (Math.abs((descAtual[Number(l.id)] || 0) - novoDesc) > 0.0001) vals.discount = novoDesc;
+                    if (Object.keys(vals).length > 0) cmds.push([1, Number(l.id), vals]);
                 } else {
                     cmds.push([0, 0, {
                         product_id: Number(l.product_id),
