@@ -259,6 +259,11 @@ input[disabled] { background: #f0f0f0; color: #555; }
 .pg-rest { margin-top: 10px; font-size: 14px; font-weight: 700; text-align: right; color: #555; }
 .pg-rest.ok { color: #2e7d32; }
 .pg-rest.warn { color: #c62828; }
+.pg-cred { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; padding: 12px; background: #f3eef6; border-radius: 10px; font-size: 14px; color: #555; }
+.pg-cred b { color: var(--primary); font-size: 16px; }
+.pg-chk { display: flex; align-items: center; gap: 10px; margin-top: 12px; font-size: 15px; font-weight: 600; cursor: pointer; }
+.pg-chk input { width: 20px; height: 20px; padding: 0; flex: none; }
+.pg-rest.info { color: #1976d2; }
 .modal .acoes { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
 .modal .acoes .btn { width: auto; margin-top: 0; padding: 12px 18px; font-size: 15px; }
 
@@ -483,8 +488,18 @@ header.bar.is-home::after {
 <div class="modal-bg" id="payBg">
     <div class="modal">
         <h2>Pagar Fatura</h2>
-        <div id="payLinhas"></div>
-        <button type="button" class="btn-add-pg" onclick="addLinhaPagamento()">+ Adicionar forma de pagamento</button>
+        <div id="payCredBox" style="display:none">
+            <div class="pg-cred"><span>Crédito disponível do cliente:</span><b id="payCredVal"></b></div>
+            <label class="pg-chk"><input type="checkbox" id="payUsarCred" onchange="pgToggleCred()"> Usar crédito disponível do cliente</label>
+            <div id="payCredCampo" style="display:none">
+                <label class="f">Valor do crédito a usar (R$)</label>
+                <input type="text" id="payCredValor" inputmode="decimal" autocomplete="off" oninput="pgCredEditou()">
+            </div>
+        </div>
+        <div id="payContas">
+            <div id="payLinhas"></div>
+            <button type="button" class="btn-add-pg" onclick="addLinhaPagamento()">+ Adicionar forma de pagamento</button>
+        </div>
         <div class="pg-rest" id="payRest"></div>
         <label class="f">Data de Pagamento</label>
         <input type="date" id="payData">
@@ -1414,7 +1429,8 @@ async function cancelarVendaAtual() {
     btn.textContent = txt;
     if (d.success) {
         const avisos = (d.warnings || []).join(' ');
-        toast('Venda cancelada.' + (avisos ? ' ' + avisos : ''), avisos ? 'err' : 'ok');
+        const devolvido = d.credito_devolvido > 0 ? ' ' + brl(d.credito_devolvido) + ' voltou como crédito do cliente.' : '';
+        toast('Venda cancelada.' + devolvido + (avisos ? ' ' + avisos : ''), avisos ? 'err' : 'ok');
         voltarParaVendas();
     } else {
         toast(d.error || 'Erro ao cancelar a venda.', 'err');
@@ -1453,32 +1469,45 @@ async function salvarEdicaoVenda() {
     }
 }
 
-/* ============ Pagamento da fatura (uma ou mais formas de pagamento) ============ */
+/* ============ Pagamento da fatura (crédito do cliente + uma ou mais formas de pagamento) ============ */
 let pagFatura = null;
-let pagTotal = 0;
+let pagTotal = 0;        // saldo da fatura a pagar
+let pagCredDisp = 0;     // crédito disponível do cliente
 let pagLinhas = [];      // [{ conta, valor, auto }]  (auto: a última linha completa sozinha o restante)
 let diariosCache = null;
 
 const pgNum = v => parseFloat(String(v).replace(',', '.')) || 0;
 const pgFmt = n => String(Math.round(n * 100) / 100).replace('.', ',');
 const pgOpcoes = sel => diariosCache.map(c => `<option value="${c.id}"${String(c.id) === String(sel) ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
+const pgCredUsar = () => $('payUsarCred').checked ? Math.round(pgNum($('payCredValor').value) * 100) / 100 : 0;
+
+// quanto falta pagar nas contas depois do crédito
+function pgBase() { return Math.max(0, Math.round((pagTotal - Math.min(pgCredUsar(), pagTotal)) * 100) / 100); }
 
 function pgRecalcAuto() {
+    const base = pgBase();
+    $('payContas').style.display = base <= 0.005 ? 'none' : '';
     const n = pagLinhas.length;
-    if (!n) return;
-    const ult = pagLinhas[n - 1];
-    if (ult.auto) {
-        const outras = pagLinhas.slice(0, -1).reduce((s, l) => s + pgNum(l.valor), 0);
-        ult.valor = pgFmt(Math.max(0, pagTotal - outras));
-        const el = document.getElementById('payV' + (n - 1));
-        if (el) el.value = ult.valor;
+    if (n) {
+        const ult = pagLinhas[n - 1];
+        if (ult.auto) {
+            const outras = pagLinhas.slice(0, -1).reduce((s, l) => s + pgNum(l.valor), 0);
+            ult.valor = pgFmt(Math.max(0, base - outras));
+            const el = document.getElementById('payV' + (n - 1));
+            if (el) el.value = ult.valor;
+        }
+    }
+    const box = $('payRest');
+    if (base <= 0.005) {
+        box.className = 'pg-rest ok';
+        box.textContent = pgCredUsar() > 0 ? 'Venda paga com o crédito do cliente ✓' : '';
+        return;
     }
     const soma = pagLinhas.reduce((s, l) => s + pgNum(l.valor), 0);
-    const rest = Math.round((pagTotal - soma) * 100) / 100;
-    const box = $('payRest');
-    box.className = 'pg-rest' + (rest < 0 ? ' warn' : rest === 0 ? ' ok' : '');
-    box.textContent = rest < 0 ? 'Passou do total em ' + brl(-rest)
-        : rest === 0 ? 'Total: ' + brl(pagTotal) + ' ✓'
+    const rest = Math.round((base - soma) * 100) / 100;
+    box.className = 'pg-rest' + (rest < 0 ? ' info' : rest === 0 ? ' ok' : '');
+    box.textContent = rest < 0 ? 'Excedente de ' + brl(-rest) + ' vira crédito do cliente'
+        : rest === 0 ? 'Total a pagar: ' + brl(base) + ' ✓'
         : 'Restante: ' + brl(rest) + ' (ficará em aberto)';
 }
 
@@ -1498,6 +1527,19 @@ function pgEditou(i, v) {
     pgRecalcAuto();
 }
 
+function pgToggleCred() {
+    const on = $('payUsarCred').checked;
+    $('payCredCampo').style.display = on ? '' : 'none';
+    $('payCredValor').value = on ? pgFmt(Math.min(pagCredDisp, pagTotal)) : '';
+    pagLinhas.forEach((l, i) => { l.auto = i === pagLinhas.length - 1; });
+    pgRecalcAuto();
+}
+
+function pgCredEditou() {
+    pagLinhas.forEach((l, i) => { l.auto = i === pagLinhas.length - 1; });
+    pgRecalcAuto();
+}
+
 function addLinhaPagamento() {
     if (pagLinhas.length) pagLinhas[pagLinhas.length - 1].auto = false;
     const usadas = pagLinhas.map(l => String(l.conta));
@@ -1512,6 +1554,16 @@ function removerLinhaPagamento(i) {
     pgRender();
 }
 
+// mostra/esconde o bloco de crédito conforme o saldo disponível
+function pgMostrarCredito() {
+    const tem = pagCredDisp > 0.005 && pagTotal > 0.005;
+    $('payCredBox').style.display = tem ? '' : 'none';
+    $('payCredVal').textContent = brl(pagCredDisp);
+    $('payUsarCred').checked = false;
+    $('payCredCampo').style.display = 'none';
+    $('payCredValor').value = '';
+}
+
 async function abrirPagamento(invoiceId, total) {
     pagFatura = invoiceId;
     if (!diariosCache) {
@@ -1524,6 +1576,10 @@ async function abrirPagamento(invoiceId, total) {
     const conta = diariosCache.some(c => String(c.id) === String(ultima)) ? String(ultima) : String(diariosCache[0].id);
     pagTotal = Math.round(total * 100) / 100;
     pagLinhas = [{ conta, valor: pgFmt(pagTotal), auto: true }];
+    // crédito que o cliente já tem (se a consulta falhar, segue sem crédito)
+    pagCredDisp = 0;
+    try { const c = await api('get_customer_credit', { invoice_id: invoiceId }); pagCredDisp = Number(c.credit) || 0; } catch (e) {}
+    pgMostrarCredito();
     pgRender();
     $('payData').value = dataLocalAgora().slice(0, 10);
     $('payBg').classList.add('show');
@@ -1536,49 +1592,78 @@ function descartarPagamento() {
 }
 
 async function criarPagamento() {
+    if (pagTotal <= 0.005) { $('payBg').classList.remove('show'); pagFatura = null; toast('Fatura já quitada.', 'ok'); return voltarParaVendas(); }
     if (!$('payData').value) return toast('Informe a data do pagamento.', 'err');
+
+    // ---- validações (antes de lançar qualquer coisa) ----
+    let usarCred = pgCredUsar();
+    if ($('payUsarCred').checked) {
+        if (!(usarCred > 0)) return toast('Informe o valor do crédito a usar.', 'err');
+        if (usarCred > pagCredDisp + 0.005) return toast('O crédito informado é maior que o disponível (' + brl(pagCredDisp) + ').', 'err');
+        if (usarCred > pagTotal + 0.005) return toast('O crédito informado é maior que o saldo da fatura (' + brl(pagTotal) + ').', 'err');
+    }
+    const base = Math.max(0, Math.round((pagTotal - usarCred) * 100) / 100);
+    const pagaEmContas = base > 0.005;
     const valores = pagLinhas.map(l => Math.round(pgNum(l.valor) * 100) / 100);
-    if (valores.some(v => v <= 0)) return toast('Informe o valor de cada forma de pagamento.', 'err');
-    const soma = Math.round(valores.reduce((s, v) => s + v, 0) * 100) / 100;
-    if (soma > pagTotal + 0.005) return toast('A soma dos pagamentos passa do total da fatura.', 'err');
+    if (pagaEmContas && valores.some(v => v <= 0)) return toast('Informe o valor de cada forma de pagamento.', 'err');
+    const soma = pagaEmContas ? Math.round(valores.reduce((s, v) => s + v, 0) * 100) / 100 : 0;
 
     const btn = $('payCriar'), btnD = $('payDescartar');
     btn.disabled = btnD.disabled = true;
     btn.textContent = 'Processando...';
+    const fim = () => { btn.disabled = btnD.disabled = false; btn.textContent = 'Criar pagamento'; };
 
-    let feitos = 0, erro = null;
-    for (let i = 0; i < pagLinhas.length; i++) {
-        const d = await api('register_payment', {
-            order_id: pagFatura,
-            journal_id: pagLinhas[i].conta,
-            amount: valores[i],
-            payment_date: $('payData').value
-        });
-        if (!d.success) { erro = d.error || 'Erro ao registrar o pagamento.'; break; }
-        feitos++;
+    // ---- 1) crédito do cliente (já pago antes: não pede conta) ----
+    if (usarCred > 0) {
+        const d = await api('apply_customer_credit', { invoice_id: pagFatura, amount: usarCred });
+        if (!d.success) { fim(); return toast(d.error || 'Erro ao usar o crédito.', 'err'); }
+        pagTotal = Math.round((pagTotal - usarCred) * 100) / 100;
+        pagCredDisp = Math.max(0, Math.round((pagCredDisp - usarCred) * 100) / 100);
+        pgMostrarCredito();
+        pagLinhas.forEach((l, i) => { l.auto = i === pagLinhas.length - 1; });
     }
 
-    btn.disabled = btnD.disabled = false;
-    btn.textContent = 'Criar pagamento';
+    // ---- 2) formas de pagamento (contas) ----
+    let feitos = 0, erro = null;
+    if (pagaEmContas) {
+        for (let i = 0; i < pagLinhas.length; i++) {
+            const d = await api('register_payment', {
+                order_id: pagFatura,
+                journal_id: pagLinhas[i].conta,
+                amount: valores[i],
+                payment_date: $('payData').value
+            });
+            if (!d.success) { erro = d.error || 'Erro ao registrar o pagamento.'; break; }
+            feitos++;
+        }
+    }
+    fim();
 
     if (!erro) {
-        try { localStorage.setItem('ultimaContaPgto', String(pagLinhas[0].conta)); } catch (e) {}
+        try { if (pagaEmContas) localStorage.setItem('ultimaContaPgto', String(pagLinhas[0].conta)); } catch (e) {}
         $('payBg').classList.remove('show');
         pagFatura = null;
-        toast(soma < pagTotal - 0.005 ? 'Pagamento parcial registrado. Resta ' + brl(pagTotal - soma) + '.' : 'Pagamento registrado!', 'ok');
+        const falta = Math.round((base - soma) * 100) / 100;
+        const exc = Math.round((soma - base) * 100) / 100;
+        let msg = 'Pagamento registrado!';
+        if (pagaEmContas && falta > 0.005) msg = 'Pagamento parcial registrado. Resta ' + brl(falta) + '.';
+        else if (pagaEmContas && exc > 0.005) msg = 'Pagamento registrado! ' + brl(exc) + ' ficou como crédito do cliente.';
+        else if (!pagaEmContas) msg = 'Venda paga com o crédito do cliente!';
+        toast(msg, 'ok');
         voltarParaVendas();
         return;
     }
     if (feitos > 0) {
         // parte já foi lançada: remove o que entrou e deixa na tela só o que falta
         const pago = valores.slice(0, feitos).reduce((s, v) => s + v, 0);
-        pagTotal = Math.round((pagTotal - pago) * 100) / 100;
+        pagTotal = Math.max(0, Math.round((pagTotal - pago) * 100) / 100);
         pagLinhas = pagLinhas.slice(feitos);
         pagLinhas[pagLinhas.length - 1].auto = true;
         pgRender();
         toast(feitos + ' pagamento(s) já registrado(s). ' + erro + ' Falta ' + brl(pagTotal) + '.', 'err');
     } else {
-        toast(erro, 'err');
+        pgRender();
+        toast(erro + (usarCred > 0 ? ' O crédito já foi usado (' + brl(usarCred) + ').' : ''), 'err');
     }
 }
 
