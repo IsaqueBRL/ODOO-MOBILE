@@ -766,7 +766,94 @@ export default async function handler(req, res) {
             return res.status(200).json({ result: contasPgto || [] });
         }
 
-        // AÇÃO: REGISTRAR PAGAMENTO DA FATURA
+        // ---- Crédito do cliente (pagamentos/notas de crédito em aberto, sem fatura ligada) ----
+        const r2 = n => Math.round(Number(n) * 100) / 100;
+        const LINHA_RECEBER = ["account_id.account_type", "=", "asset_receivable"];
+
+        // Cliente da fatura (cadastro comercial) para consultar o crédito
+        const clienteDaFatura = async (invoiceId) => {
+            const f = await execute("account.move", "read", [[Number(invoiceId)]], { fields: ["partner_id", "commercial_partner_id", "name", "state", "amount_residual"] });
+            const inv = f && f[0];
+            if (!inv) return null;
+            const pid = Array.isArray(inv.commercial_partner_id) ? inv.commercial_partner_id[0]
+                : (Array.isArray(inv.partner_id) ? inv.partner_id[0] : null);
+            return { inv, partnerId: pid, payerId: Array.isArray(inv.partner_id) ? inv.partner_id[0] : pid };
+        };
+
+        // Linhas de crédito em aberto do cliente (mais antigas primeiro)
+        const linhasDeCredito = async (partnerId, exceptMoveId) => {
+            const dom = [["partner_id", "child_of", Number(partnerId)], LINHA_RECEBER, ["parent_state", "=", "posted"], ["amount_residual", "<", 0]];
+            if (exceptMoveId) dom.push(["move_id", "!=", Number(exceptMoveId)]);
+            return (await execute("account.move.line", "search_read", [dom], { fields: ["id", "amount_residual", "date"], order: "date asc, id asc" })) || [];
+        };
+
+        // AÇÃO: CRÉDITO DISPONÍVEL DO CLIENTE (pela fatura)
+        if (action === "get_customer_credit") {
+            const { invoice_id } = body;
+            if (!invoice_id) return res.status(400).json({ error: "ID da fatura é obrigatório." });
+            const c = await clienteDaFatura(invoice_id);
+            if (!c || !c.partnerId) return res.status(200).json({ credit: 0 });
+            const linhas = await linhasDeCredito(c.partnerId, invoice_id);
+            const total = r2(linhas.reduce((t, l) => t - Number(l.amount_residual), 0));
+            return res.status(200).json({ credit: total > 0 ? total : 0, partner_id: c.partnerId });
+        }
+
+        // AÇÃO: USAR CRÉDITO DO CLIENTE NA FATURA (valor escolhido pelo usuário)
+        if (action === "apply_customer_credit") {
+            const { invoice_id, amount } = body;
+            const X = r2(amount);
+            if (!invoice_id || !(X > 0)) return res.status(400).json({ error: "Informe o valor do crédito a usar." });
+
+            let c = await clienteDaFatura(invoice_id);
+            if (!c) return res.status(404).json({ error: "Fatura não encontrada." });
+            if (c.inv.state === "draft") {
+                try { await execute("account.move", "action_post", [[Number(invoice_id)]]); }
+                catch (e) { return res.status(400).json({ error: "Não foi possível lançar a fatura para usar o crédito: " + e.message }); }
+                c = await clienteDaFatura(invoice_id);
+            }
+            if (c.inv.state !== "posted") return res.status(400).json({ error: "A fatura não está lançada." });
+
+            const residual = r2(c.inv.amount_residual);
+            if (X > residual + 0.005) return res.status(400).json({ error: "O crédito informado é maior que o saldo da fatura (" + residual.toFixed(2).replace(".", ",") + ")." });
+
+            const creditos = await linhasDeCredito(c.partnerId, invoice_id);
+            const disponivel = r2(creditos.reduce((t, l) => t - Number(l.amount_residual), 0));
+            if (X > disponivel + 0.005) return res.status(400).json({ error: "O cliente só tem " + disponivel.toFixed(2).replace(".", ",") + " de crédito." });
+
+            const linhaFat = await execute("account.move.line", "search_read", [[["move_id", "=", Number(invoice_id)], LINHA_RECEBER, ["amount_residual", ">", 0]]], { fields: ["id", "amount_residual"], limit: 1 });
+            if (!linhaFat || linhaFat.length === 0) return res.status(400).json({ error: "A fatura não tem saldo a receber." });
+            const fatId = linhaFat[0].id;
+
+            let faltaUsar = X, saldoFat = residual, aplicado = 0;
+            try {
+                for (const cl of creditos) {
+                    if (faltaUsar <= 0.004 || saldoFat <= 0.004) break;
+                    const credLinha = r2(-cl.amount_residual);
+                    const natural = r2(Math.min(credLinha, saldoFat));      // o que a conciliação normal do Odoo usaria
+                    const a = r2(Math.min(faltaUsar, natural));
+                    if (a <= 0.004) continue;
+                    if (Math.abs(a - natural) < 0.005) {
+                        // usa a linha inteira (ou até quitar a fatura): conciliação padrão do Odoo
+                        await execute("account.move.line", "reconcile", [[fatId, cl.id]]);
+                    } else {
+                        // usa só uma parte do crédito: conciliação parcial com o valor escolhido
+                        await execute("account.partial.reconcile", "create", [{
+                            debit_move_id: fatId, credit_move_id: cl.id,
+                            amount: a, debit_amount_currency: a, credit_amount_currency: a
+                        }]);
+                    }
+                    aplicado = r2(aplicado + a); faltaUsar = r2(faltaUsar - a); saldoFat = r2(saldoFat - a);
+                }
+            } catch (e) {
+                return res.status(500).json({ error: "Não foi possível usar o crédito: " + e.message, applied: aplicado });
+            }
+            if (faltaUsar > 0.005) return res.status(500).json({ error: "Só foi possível usar " + aplicado.toFixed(2).replace(".", ",") + " de crédito.", applied: aplicado });
+
+            try { await sincronizarBloqueioPorFatura(Number(invoice_id)); } catch (e) { /* melhor esforço */ }
+            return res.status(200).json({ success: true, applied: aplicado, residual: saldoFat });
+        }
+
+        // AÇÃO: REGISTRAR PAGAMENTO DA FATURA (o que passar do saldo vira crédito do cliente)
         if (action === "register_payment") {
             const { order_id, journal_id, amount, payment_date } = body;
             if (!order_id || !journal_id || !amount) {
@@ -783,30 +870,46 @@ export default async function handler(req, res) {
                 }
             }
 
-            const wizardId = await execute("account.payment.register", "create", [{
-                journal_id: Number(journal_id),
-                amount: Number(amount),
-                payment_date: payment_date || false
-            }], {
-                context: {
-                    active_model: "account.move",
-                    active_ids: [Number(order_id)]
-                }
-            });
+            const c = await clienteDaFatura(order_id);
+            const residual = c ? Math.max(0, r2(c.inv.amount_residual)) : r2(amount);
+            const valor = r2(amount);
+            const paraFatura = Math.min(valor, residual);
+            const excedente = r2(valor - paraFatura);
 
-            if (wizardId) {
-                await execute("account.payment.register", "action_create_payments", [[wizardId]], {
-                    context: {
-                        active_model: "account.move",
-                        active_ids: [Number(order_id)]
-                    }
+            if (paraFatura > 0.004) {
+                const wizardId = await execute("account.payment.register", "create", [{
+                    journal_id: Number(journal_id),
+                    amount: paraFatura,
+                    payment_date: payment_date || false
+                }], {
+                    context: { active_model: "account.move", active_ids: [Number(order_id)] }
                 });
-                // Fatura paga => tranca pedido e entrega
-                try { await sincronizarBloqueioPorFatura(Number(order_id)); } catch (e) { /* melhor esforço */ }
-                return res.status(200).json({ success: true });
-            } else {
-                return res.status(500).json({ error: "Não foi possível gerar o pagamento no Odoo." });
+                if (!wizardId) return res.status(500).json({ error: "Não foi possível gerar o pagamento no Odoo." });
+                await execute("account.payment.register", "action_create_payments", [[wizardId]], {
+                    context: { active_model: "account.move", active_ids: [Number(order_id)] }
+                });
             }
+
+            // Passou do saldo: o excedente entra como pagamento do cliente sem fatura (= crédito para compras futuras)
+            if (excedente > 0.004) {
+                if (!c || !c.payerId) return res.status(400).json({ error: "Não foi possível identificar o cliente para guardar o crédito." });
+                try {
+                    const dados = {
+                        payment_type: "inbound", partner_type: "customer", partner_id: c.payerId,
+                        amount: excedente, journal_id: Number(journal_id),
+                        ref: "Crédito do cliente - " + (c.inv.name || "")
+                    };
+                    if (payment_date) dados.date = payment_date;
+                    const pid = await execute("account.payment", "create", [dados]);
+                    await execute("account.payment", "action_post", [[pid]]);
+                } catch (e) {
+                    return res.status(500).json({ error: "A fatura foi paga, mas não foi possível guardar o crédito de " + excedente.toFixed(2).replace(".", ",") + ": " + e.message });
+                }
+            }
+
+            // Fatura paga => tranca pedido e entrega
+            try { await sincronizarBloqueioPorFatura(Number(order_id)); } catch (e) { /* melhor esforço */ }
+            return res.status(200).json({ success: true, excess: excedente });
         }
 
         // AÇÃO: BUSCAR CONTAS FINANCEIRAS E SALDO
@@ -963,6 +1066,33 @@ export default async function handler(req, res) {
                 estavaBloqueado = !!(info && info[0] && info[0].state === "done");
             }
 
+            // Pagamentos e crédito usados nas faturas da venda voltam para o cliente como crédito
+            let creditoDevolvido = 0;
+            const avisosCredito = [];
+            try {
+                const pedF = await execute("sale.order", "read", [[oid]], { fields: ["invoice_ids"] });
+                const idsF = (pedF && pedF[0] && pedF[0].invoice_ids) || [];
+                if (idsF.length > 0) {
+                    const postadas = await execute("account.move", "search_read", [[["id", "in", idsF], ["state", "=", "posted"]]], { fields: ["id", "name", "amount_total", "amount_residual"] });
+                    for (const f of (postadas || [])) {
+                        const pago = r2(Number(f.amount_total) - Number(f.amount_residual));
+                        try {
+                            if (pago > 0.004) {
+                                const linhas = await execute("account.move.line", "search_read", [[["move_id", "=", f.id], LINHA_RECEBER]], { fields: ["id"] });
+                                await execute("account.move.line", "remove_move_reconcile", [(linhas || []).map(l => l.id)]);
+                                creditoDevolvido = r2(creditoDevolvido + pago);
+                            }
+                            await execute("account.move", "button_draft", [[f.id]]);
+                            await execute("account.move", "button_cancel", [[f.id]]);
+                        } catch (e) {
+                            avisosCredito.push("Não foi possível desfazer o pagamento da fatura " + f.name + ": " + e.message);
+                        }
+                    }
+                }
+            } catch (e) {
+                avisosCredito.push("Não foi possível devolver o crédito ao cliente: " + e.message);
+            }
+
             if (estavaBloqueado) {
                 await execute("sale.order", "action_unlock", [[oid]]);
             }
@@ -987,7 +1117,8 @@ export default async function handler(req, res) {
             } catch (e) {
                 warnings.push("Venda cancelada, mas não foi possível devolver o item ao estoque: " + e.message + " Faça a devolução manualmente no Odoo.");
             }
-            return res.status(200).json({ success: true, devolvidos, warnings });
+            warnings.push(...avisosCredito);
+            return res.status(200).json({ success: true, devolvidos, warnings, credito_devolvido: creditoDevolvido });
         }
 
         // AÇÃO: REABRIR PEDIDO CANCELADO/CONFIRMADO COMO ORÇAMENTO (EDITÁVEL)
