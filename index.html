@@ -252,6 +252,13 @@ input[disabled] { background: #f0f0f0; color: #555; }
 .modal-bg.show { display: flex; }
 .modal { background: #fff; width: 100%; max-width: 420px; border-radius: 16px; padding: 22px 20px; }
 .modal h2 { font-size: 22px; color: var(--primary); margin-bottom: 4px; }
+.pgl { display: grid; grid-template-columns: 1fr 112px 36px; gap: 8px; align-items: end; margin-top: 4px; }
+.pgl .pg-x { height: 44px; border: none; border-radius: 10px; background: #fde4e4; color: #c62828; font-size: 18px; cursor: pointer; }
+.pgl .pg-x[hidden] { visibility: hidden; display: block; }
+.btn-add-pg { width: 100%; margin-top: 12px; padding: 11px; border: 1px dashed var(--primary); background: #f6eef3; color: var(--primary); font-weight: 700; font-size: 14px; border-radius: 10px; cursor: pointer; }
+.pg-rest { margin-top: 10px; font-size: 14px; font-weight: 700; text-align: right; color: #555; }
+.pg-rest.ok { color: #2e7d32; }
+.pg-rest.warn { color: #c62828; }
 .modal .acoes { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
 .modal .acoes .btn { width: auto; margin-top: 0; padding: 12px 18px; font-size: 15px; }
 
@@ -476,10 +483,9 @@ header.bar.is-home::after {
 <div class="modal-bg" id="payBg">
     <div class="modal">
         <h2>Pagar Fatura</h2>
-        <label class="f">Conta</label>
-        <select id="payConta"></select>
-        <label class="f">Valor</label>
-        <input type="text" id="payValor" inputmode="decimal" autocomplete="off">
+        <div id="payLinhas"></div>
+        <button type="button" class="btn-add-pg" onclick="addLinhaPagamento()">+ Adicionar forma de pagamento</button>
+        <div class="pg-rest" id="payRest"></div>
         <label class="f">Data de Pagamento</label>
         <input type="date" id="payData">
         <div class="acoes">
@@ -1447,9 +1453,64 @@ async function salvarEdicaoVenda() {
     }
 }
 
-/* ============ Pagamento da fatura ============ */
+/* ============ Pagamento da fatura (uma ou mais formas de pagamento) ============ */
 let pagFatura = null;
+let pagTotal = 0;
+let pagLinhas = [];      // [{ conta, valor, auto }]  (auto: a última linha completa sozinha o restante)
 let diariosCache = null;
+
+const pgNum = v => parseFloat(String(v).replace(',', '.')) || 0;
+const pgFmt = n => String(Math.round(n * 100) / 100).replace('.', ',');
+const pgOpcoes = sel => diariosCache.map(c => `<option value="${c.id}"${String(c.id) === String(sel) ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
+
+function pgRecalcAuto() {
+    const n = pagLinhas.length;
+    if (!n) return;
+    const ult = pagLinhas[n - 1];
+    if (ult.auto) {
+        const outras = pagLinhas.slice(0, -1).reduce((s, l) => s + pgNum(l.valor), 0);
+        ult.valor = pgFmt(Math.max(0, pagTotal - outras));
+        const el = document.getElementById('payV' + (n - 1));
+        if (el) el.value = ult.valor;
+    }
+    const soma = pagLinhas.reduce((s, l) => s + pgNum(l.valor), 0);
+    const rest = Math.round((pagTotal - soma) * 100) / 100;
+    const box = $('payRest');
+    box.className = 'pg-rest' + (rest < 0 ? ' warn' : rest === 0 ? ' ok' : '');
+    box.textContent = rest < 0 ? 'Passou do total em ' + brl(-rest)
+        : rest === 0 ? 'Total: ' + brl(pagTotal) + ' ✓'
+        : 'Restante: ' + brl(rest) + ' (ficará em aberto)';
+}
+
+function pgRender() {
+    $('payLinhas').innerHTML = pagLinhas.map((l, i) => `
+        <div class="pgl">
+            <div><label class="f">Conta</label><select id="payC${i}" onchange="pagLinhas[${i}].conta=this.value">${pgOpcoes(l.conta)}</select></div>
+            <div><label class="f">Valor</label><input type="text" id="payV${i}" inputmode="decimal" autocomplete="off" value="${esc(l.valor)}" oninput="pgEditou(${i}, this.value)"></div>
+            <button type="button" class="pg-x" ${pagLinhas.length > 1 ? '' : 'hidden'} onclick="removerLinhaPagamento(${i})">✕</button>
+        </div>`).join('');
+    pgRecalcAuto();
+}
+
+function pgEditou(i, v) {
+    pagLinhas[i].valor = v;
+    pagLinhas[i].auto = false;
+    pgRecalcAuto();
+}
+
+function addLinhaPagamento() {
+    if (pagLinhas.length) pagLinhas[pagLinhas.length - 1].auto = false;
+    const usadas = pagLinhas.map(l => String(l.conta));
+    const livre = diariosCache.find(c => !usadas.includes(String(c.id)));
+    pagLinhas.push({ conta: String((livre || diariosCache[0]).id), valor: '', auto: true });
+    pgRender();
+}
+
+function removerLinhaPagamento(i) {
+    pagLinhas.splice(i, 1);
+    if (pagLinhas.length) pagLinhas[pagLinhas.length - 1].auto = true;
+    pgRender();
+}
 
 async function abrirPagamento(invoiceId, total) {
     pagFatura = invoiceId;
@@ -1458,9 +1519,12 @@ async function abrirPagamento(invoiceId, total) {
         diariosCache = d.result || [];
     }
     if (diariosCache.length === 0) { toast('Nenhuma conta de pagamento encontrada.', 'err'); return voltarParaVendas(); }
-    const ultima = localStorage.getItem('ultimaContaPgto');
-    $('payConta').innerHTML = diariosCache.map(c => `<option value="${c.id}"${String(c.id) === ultima ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
-    $('payValor').value = String(Math.round(total * 100) / 100).replace('.', ',');
+    let ultima = null;
+    try { ultima = localStorage.getItem('ultimaContaPgto'); } catch (e) {}
+    const conta = diariosCache.some(c => String(c.id) === String(ultima)) ? String(ultima) : String(diariosCache[0].id);
+    pagTotal = Math.round(total * 100) / 100;
+    pagLinhas = [{ conta, valor: pgFmt(pagTotal), auto: true }];
+    pgRender();
     $('payData').value = dataLocalAgora().slice(0, 10);
     $('payBg').classList.add('show');
 }
@@ -1472,32 +1536,53 @@ function descartarPagamento() {
 }
 
 async function criarPagamento() {
-    const valor = parseFloat(String($('payValor').value).replace(',', '.'));
-    if (!valor || valor <= 0) return toast('Informe o valor do pagamento.', 'err');
     if (!$('payData').value) return toast('Informe a data do pagamento.', 'err');
+    const valores = pagLinhas.map(l => Math.round(pgNum(l.valor) * 100) / 100);
+    if (valores.some(v => v <= 0)) return toast('Informe o valor de cada forma de pagamento.', 'err');
+    const soma = Math.round(valores.reduce((s, v) => s + v, 0) * 100) / 100;
+    if (soma > pagTotal + 0.005) return toast('A soma dos pagamentos passa do total da fatura.', 'err');
+
     const btn = $('payCriar'), btnD = $('payDescartar');
     btn.disabled = btnD.disabled = true;
     btn.textContent = 'Processando...';
-    const d = await api('register_payment', {
-        order_id: pagFatura,
-        journal_id: $('payConta').value,
-        amount: valor,
-        payment_date: $('payData').value
-    });
+
+    let feitos = 0, erro = null;
+    for (let i = 0; i < pagLinhas.length; i++) {
+        const d = await api('register_payment', {
+            order_id: pagFatura,
+            journal_id: pagLinhas[i].conta,
+            amount: valores[i],
+            payment_date: $('payData').value
+        });
+        if (!d.success) { erro = d.error || 'Erro ao registrar o pagamento.'; break; }
+        feitos++;
+    }
+
     btn.disabled = btnD.disabled = false;
     btn.textContent = 'Criar pagamento';
-    if (d.success) {
-        try { localStorage.setItem('ultimaContaPgto', $('payConta').value); } catch (e) {}
+
+    if (!erro) {
+        try { localStorage.setItem('ultimaContaPgto', String(pagLinhas[0].conta)); } catch (e) {}
         $('payBg').classList.remove('show');
         pagFatura = null;
-        toast('Pagamento registrado!', 'ok');
+        toast(soma < pagTotal - 0.005 ? 'Pagamento parcial registrado. Resta ' + brl(pagTotal - soma) + '.' : 'Pagamento registrado!', 'ok');
         voltarParaVendas();
+        return;
+    }
+    if (feitos > 0) {
+        // parte já foi lançada: remove o que entrou e deixa na tela só o que falta
+        const pago = valores.slice(0, feitos).reduce((s, v) => s + v, 0);
+        pagTotal = Math.round((pagTotal - pago) * 100) / 100;
+        pagLinhas = pagLinhas.slice(feitos);
+        pagLinhas[pagLinhas.length - 1].auto = true;
+        pgRender();
+        toast(feitos + ' pagamento(s) já registrado(s). ' + erro + ' Falta ' + brl(pagTotal) + '.', 'err');
     } else {
-        toast(d.error || 'Erro ao registrar o pagamento.', 'err');
+        toast(erro, 'err');
     }
 }
 
-async function salvarVenda(confirmar) {
+async function salvarVenda(lancar) {
     if (venda.editId) return salvarEdicaoVenda();
     if (!meuLocal) return toast('Escolha o seu local.', 'err');
     if (venda.linhas.length === 0) return toast('Adicione ao menos um produto.', 'err');
@@ -1520,7 +1605,7 @@ async function salvarVenda(confirmar) {
     const btnA = $('btnConfirmarVenda'), btnB = $('btnOrcamento');
     const txtA = btnA.textContent, txtB = btnB.textContent;
     btnA.disabled = btnB.disabled = true;
-    (confirmar ? btnA : btnB).textContent = 'Processando...';
+    (lancar ? btnA : btnB).textContent = 'Processando...';
 
     const d = await api('save_sale_order', {
         partner_id: venda.partner.id,
@@ -1529,7 +1614,7 @@ async function salvarVenda(confirmar) {
         date_order: dataVendaISO(),
         invoice_date: dataLocalAgora().slice(0, 10),
         due_date: venda.venc || null,
-        confirm: confirmar
+        confirm: lancar
     });
 
     btnA.disabled = btnB.disabled = false;
@@ -1537,9 +1622,9 @@ async function salvarVenda(confirmar) {
 
     if (d.success) {
         const avisos = (d.warnings || []).join(' ');
-        toast(confirmar ? ('Venda lançada!' + (avisos ? ' ' + avisos : '')) : 'Rascunho salvo!', avisos ? 'err' : 'ok');
+        toast(lancar ? ('Venda lançada!' + (avisos ? ' ' + avisos : '')) : 'Rascunho salvo!', avisos ? 'err' : 'ok');
         const total = venda.linhas.reduce((s, l) => s + totalLinha(l), 0);
-        if (confirmar && d.invoice_id) {
+        if (lancar && d.invoice_id) {
             // fatura criada (provisória até o pagamento): abre direto o pagamento
             await abrirPagamento(d.invoice_id, total);
         } else {
