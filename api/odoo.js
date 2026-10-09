@@ -746,8 +746,24 @@ export default async function handler(req, res) {
 
         // AÇÃO: BUSCAR DIÁRIOS / CONTAS DE PAGAMENTO (BANCO/CAIXA)
         if (action === "get_payment_journals") {
-            const journals = await lookups.journals();
-            return res.status(200).json({ result: journals || [] });
+            // Só contas do tipo "Banco e caixa" (mesmo critério do Plano de contas do Odoo).
+            // O pagamento é lançado pelo diário (id), mas a lista mostra o nome da conta financeira dele.
+            const contasPgto = await cached("payment_accounts", TTL_LONG, async () => {
+                const diarios = await execute("account.journal", "search_read", [[["type", "in", ["bank", "cash"]]]], {
+                    fields: ["id", "name", "type", "default_account_id"]
+                });
+                const accIds = [...new Set((diarios || []).map(j => Array.isArray(j.default_account_id) ? j.default_account_id[0] : null).filter(Boolean))];
+                const contas = accIds.length
+                    ? await execute("account.account", "search_read", [[["id", "in", accIds], ["account_type", "in", ["asset_cash", "bank_and_cash"]]]], { fields: ["id", "name"] })
+                    : [];
+                const nomePorConta = {};
+                (contas || []).forEach(c => { nomePorConta[c.id] = c.name; });
+                return (diarios || [])
+                    .filter(j => Array.isArray(j.default_account_id) && nomePorConta[j.default_account_id[0]])
+                    .map(j => ({ id: j.id, name: nomePorConta[j.default_account_id[0]], journal_name: j.name, type: j.type }))
+                    .sort((a, b) => String(a.name).localeCompare(String(b.name), "pt-BR"));
+            });
+            return res.status(200).json({ result: contasPgto || [] });
         }
 
         // AÇÃO: REGISTRAR PAGAMENTO DA FATURA
