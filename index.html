@@ -343,6 +343,19 @@ header.bar.is-home::after {
 #btnInstalar:active { background: var(--primary-dark); }
 #installFechar { background: none; border: none; color: var(--muted); font-size: 20px; cursor: pointer; padding: 4px 6px; }
 #installIos { display: none; margin-top: 10px; font-size: 13.5px; color: var(--text); background: #f6eff4; border-radius: 10px; padding: 10px 12px; line-height: 1.5; }
+
+/* ===== Carregamento ===== */
+#loadingBg { position: fixed; inset: 0; background: rgba(40,25,36,.45); z-index: 9000; display: none; align-items: center; justify-content: center; }
+#loadingBg.show { display: flex; }
+#loadingBox { background: #fff; border-radius: 18px; padding: 22px 26px; text-align: center; min-width: 200px; box-shadow: 0 8px 30px rgba(0,0,0,.25); }
+#loadingBox .sp { width: 34px; height: 34px; border: 4px solid #eadde6; border-top-color: var(--primary); border-radius: 50%; margin: 0 auto 12px; animation: giro .8s linear infinite; }
+#loadingMsg { font-weight: 700; color: var(--primary); font-size: 15px; }
+@keyframes giro { to { transform: rotate(360deg); } }
+.skel { background: linear-gradient(90deg, #eceaee 25%, #f6f4f7 50%, #eceaee 75%); background-size: 200% 100%; animation: brilho 1.2s infinite; border-radius: 8px; }
+@keyframes brilho { to { background-position: -200% 0; } }
+.card.sk { pointer-events: none; }
+.card.sk .skel { height: 14px; margin-bottom: 9px; }
+.resumo-dia.carregando b { color: transparent; border-radius: 8px; background: linear-gradient(90deg, #eceaee 25%, #f6f4f7 50%, #eceaee 75%); background-size: 200% 100%; animation: brilho 1.2s infinite; width: 60%; margin: 0 auto 4px; }
 </style>
 </head>
 <body>
@@ -565,6 +578,7 @@ header.bar.is-home::after {
 </div>
 
 <div id="toast"></div>
+<div id="loadingBg"><div id="loadingBox"><div class="sp"></div><div id="loadingMsg">Carregando...</div></div></div>
 
 <script>
 /* ============ Utilidades ============ */
@@ -619,19 +633,49 @@ function toast(msg, tipo) {
     toastTimer = setTimeout(() => { t.className = ''; }, tipo === 'err' ? 5000 : 3000);
 }
 
+// Consultas (só leitura) podem ser repetidas com segurança; lançamentos NUNCA são repetidos (evita venda/pagamento duplicado)
+const ACOES_LEITURA = /^(get_|search_)/;
 async function api(action, dados = {}) {
-    try {
-        const r = await fetch('/api/odoo', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action, ...dados })
-        });
-        const j = await r.json().catch(() => ({ error: 'A API não respondeu corretamente (erro ' + r.status + '). Confira se o arquivo está em api/odoo.js no GitHub.' }));
-        if (!r.ok && !j.error) j.error = 'Erro ' + r.status;
-        return j;
-    } catch (e) {
-        return { error: 'Sem conexão com o servidor.' };
+    const leitura = ACOES_LEITURA.test(action);
+    const tentativas = leitura ? 2 : 1;
+    let ultimoErro = 'Sem conexão com o servidor.';
+    for (let t = 0; t < tentativas; t++) {
+        const ctl = new AbortController();
+        const to = setTimeout(() => ctl.abort(), leitura ? 25000 : 60000);
+        try {
+            const r = await fetch('/api/odoo', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action, ...dados }),
+                signal: ctl.signal
+            });
+            const j = await r.json().catch(() => ({ error: 'A API não respondeu corretamente (erro ' + r.status + '). Confira se o arquivo está em api/odoo.js no GitHub.' }));
+            if (!r.ok && !j.error) j.error = 'Erro ' + r.status;
+            if (leitura && r.status >= 500 && t < tentativas - 1) { ultimoErro = j.error; await new Promise(ok => setTimeout(ok, 600)); continue; }
+            return j;
+        } catch (e) {
+            ultimoErro = e.name === 'AbortError' ? 'O servidor demorou demais para responder. Tente novamente.' : 'Sem conexão com o servidor.';
+            if (t < tentativas - 1) await new Promise(ok => setTimeout(ok, 600));
+        } finally { clearTimeout(to); }
     }
+    return { error: ultimoErro };
+}
+
+/* Tela de carregamento (bloqueia toques enquanto algo importante está sendo feito) */
+let carregandoN = 0;
+function mostrarCarregando(msg) {
+    carregandoN++;
+    $('loadingMsg').textContent = msg || 'Carregando...';
+    $('loadingBg').classList.add('show');
+}
+function esconderCarregando() {
+    carregandoN = Math.max(0, carregandoN - 1);
+    if (carregandoN === 0) $('loadingBg').classList.remove('show');
+}
+// executa uma tarefa assíncrona com a tela de carregamento (sempre fecha, mesmo com erro)
+async function comCarregando(msg, fn) {
+    mostrarCarregando(msg);
+    try { return await fn(); } finally { esconderCarregando(); }
 }
 
 const timers = {};
@@ -1053,9 +1097,12 @@ function abrirVendas() {
 
 // Cards do topo: valor vendido e quantidade de vendas confirmadas HOJE (no local escolhido)
 async function carregarResumoDia() {
+    const caixa = document.querySelector('.resumo-dia');
+    if (caixa) caixa.classList.add('carregando');
     const ini = new Date(); ini.setHours(0, 0, 0, 0);
     const fim = new Date(ini); fim.setDate(fim.getDate() + 1);
     const d = await api('get_sales_summary', { warehouse_id: meuLocal ? meuLocal.wh.id : '', date_from: ini.toISOString(), date_to: fim.toISOString() });
+    if (caixa) caixa.classList.remove('carregando');
     if (d && d.total !== undefined) {
         $('resVendido').textContent = brl(d.total);
         $('resQtd').textContent = d.count;
@@ -1073,11 +1120,12 @@ async function carregarVendas() {
     const req = ++venReq;
     if (!venStatus) venStatus = 'last';
     $('venStatus').textContent = 'Carregando...';
-    // Últimas = 10 mais recentes (ao pesquisar, mostra até 100); Todas = todas as vendas
-    const limite = venStatus === 'last' ? (query ? 100 : 10) : (venStatus === 'all' ? 1000 : 100);
-    const d = await api('get_sales', { query, limit: limite, warehouse_id: meuLocal ? meuLocal.wh.id : '', order_status: (venStatus === 'last' || venStatus === 'all') ? '' : venStatus });
+    $('venLista').innerHTML = [1, 2, 3].map(() => '<div class="card sk"><div class="skel" style="width:55%;height:18px"></div><div class="skel" style="width:30%"></div><div class="skel" style="width:20%"></div><div class="skel" style="width:28%;height:22px;border-radius:999px"></div></div>').join('');
+    // Últimas = 5 mais recentes, sem canceladas (ao pesquisar, mostra até 100); Todas = todas as vendas
+    const limite = venStatus === 'last' ? (query ? 100 : 5) : (venStatus === 'all' ? 1000 : 100);
+    const d = await api('get_sales', { query, limit: limite, warehouse_id: meuLocal ? meuLocal.wh.id : '', order_status: (venStatus === 'last' || venStatus === 'all') ? '' : venStatus, exclude_cancel: venStatus === 'last' });
     if (req !== venReq) return;
-    if (!d.result) { $('venStatus').textContent = d.error || 'Erro ao carregar vendas.'; return; }
+    if (!d.result) { $('venLista').innerHTML = ''; $('venStatus').textContent = d.error || 'Erro ao carregar vendas.'; return; }
     if (d.result.length === 0) { $('venLista').innerHTML = ''; $('venStatus').textContent = 'Nenhuma venda encontrada.'; return; }
     $('venStatus').textContent = d.result.length + ' venda(s)';
 
@@ -1344,15 +1392,19 @@ function aplicarModoTelaVenda() {
 }
 
 async function abrirEdicaoVenda(id) {
-    toast('Abrindo venda...', 'ok');
+    return comCarregando('Abrindo venda...', () => abrirEdicaoVendaInterno(id));
+}
+
+async function abrirEdicaoVendaInterno(id) {
+    const falha = m => { toast(m, 'err'); return false; };
     const d = await api('get_sale_detail', { order_id: id });
-    if (!d.order) return toast(d.error || 'Erro ao abrir a venda.', 'err');
+    if (!d.order) return falha(d.error || 'Erro ao abrir a venda.');
     const o = d.order;
-    if (o.state !== 'sale' && o.state !== 'done') return toast('Só vendas lançadas podem ser editadas.', 'err');
+    if (o.state !== 'sale' && o.state !== 'done') return falha('Só vendas lançadas podem ser editadas.');
     const linhasOdoo = d.lines || [];
     const prodIds = linhasOdoo.map(l => l.product_id[0]);
-    if (new Set(prodIds).size !== prodIds.length) return toast('Esta venda tem o mesmo produto em mais de uma linha. Edite-a pelo computador.', 'err');
-    if (!Array.isArray(o.warehouse_id)) return toast('A venda não tem local de estoque definido.', 'err');
+    if (new Set(prodIds).size !== prodIds.length) return falha('Esta venda tem o mesmo produto em mais de uma linha. Edite-a pelo computador.');
+    if (!Array.isArray(o.warehouse_id)) return falha('A venda não tem local de estoque definido.');
 
     const faturaAtiva = (d.invoices || []).find(i => i.state !== 'cancel');
     const travada = (d.invoices || []).some(i => i.state !== 'cancel' && ['paid', 'in_payment', 'partial'].includes(i.payment_state));
@@ -1393,6 +1445,8 @@ async function abrirEdicaoVenda(id) {
     venda.sigOrig = assinaturaVenda();
     if (pilha[pilha.length - 1] !== 'novaVenda') abrir('novaVenda'); else ir('novaVenda');
     carregarProdutosDoLocal();
+    if (!diariosCache) api('get_payment_journals').then(r => { diariosCache = (r && r.result) || null; }); // já deixa as contas prontas para o botão Pagar
+    return true;
 }
 
 function atualizarTextoDatas() {
@@ -1411,7 +1465,7 @@ function assinaturaVenda() {
 async function pagarVendaAtual() {
     if (!venda || !venda.editId || !venda.invoiceId) return toast('Esta venda não tem fatura para pagar.', 'err');
     if (assinaturaVenda() !== venda.sigOrig) return toast('Há alterações não salvas. Toque em "Salvar alterações" antes de pagar.', 'err');
-    await abrirPagamento(venda.invoiceId, venda.invoiceResidual);
+    await comCarregando('Abrindo pagamento...', () => abrirPagamento(venda.invoiceId, venda.invoiceResidual));
 }
 
 async function cancelarVendaAtual() {
@@ -1424,7 +1478,7 @@ async function cancelarVendaAtual() {
     btn.disabled = true;
     const txt = btn.textContent;
     btn.textContent = 'Cancelando...';
-    const d = await api('cancel_sale_order', { order_id: venda.editId });
+    const d = await comCarregando('Cancelando venda...', () => api('cancel_sale_order', { order_id: venda.editId }));
     btn.disabled = false;
     btn.textContent = txt;
     if (d.success) {
@@ -1450,14 +1504,16 @@ async function salvarEdicaoVenda() {
     const txt = btn.textContent;
     btn.disabled = true;
     btn.textContent = 'Salvando...';
-    const d = await api('update_sale_lines', {
+    mostrarCarregando('Salvando alterações...');
+    let d;
+    try { d = await api('update_sale_lines', {
         order_id: venda.editId,
         date_order: dateOrder,
         due_date: venda.venc || null,
         invoice_date: dataLocalAgora().slice(0, 10),
         lines: venda.linhas.map(l => ({ id: l.lineId || null, product_id: l.id, qty: l.qty, price: l.price, discount: Number(pctDesc(l).toFixed(4)) })),
         removed_line_ids: venda.removidos || []
-    });
+    }); } finally { esconderCarregando(); }
     btn.disabled = false;
     btn.textContent = txt;
     if (d.success) {
@@ -1611,7 +1667,9 @@ async function criarPagamento() {
     const btn = $('payCriar'), btnD = $('payDescartar');
     btn.disabled = btnD.disabled = true;
     btn.textContent = 'Processando...';
-    const fim = () => { btn.disabled = btnD.disabled = false; btn.textContent = 'Criar pagamento'; };
+    mostrarCarregando('Registrando pagamento...');
+    let fechado = false;
+    const fim = () => { if (!fechado) { fechado = true; esconderCarregando(); } btn.disabled = btnD.disabled = false; btn.textContent = 'Criar pagamento'; };
 
     // ---- 1) crédito do cliente (já pago antes: não pede conta) ----
     if (usarCred > 0) {
@@ -1692,7 +1750,9 @@ async function salvarVenda(lancar) {
     btnA.disabled = btnB.disabled = true;
     (lancar ? btnA : btnB).textContent = 'Processando...';
 
-    const d = await api('save_sale_order', {
+    mostrarCarregando(lancar ? 'Lançando venda...' : 'Salvando rascunho...');
+    let d;
+    try { d = await api('save_sale_order', {
         partner_id: venda.partner.id,
         warehouse_id: meuLocal.wh.id,
         lines: venda.linhas.map(l => ({ product_id: l.id, qty: l.qty, price: l.price, discount: Number(pctDesc(l).toFixed(4)) })),
@@ -1700,16 +1760,18 @@ async function salvarVenda(lancar) {
         invoice_date: dataLocalAgora().slice(0, 10),
         due_date: venda.venc || null,
         confirm: lancar
-    });
-
-    btnA.disabled = btnB.disabled = false;
-    btnA.textContent = txtA; btnB.textContent = txtB;
+    }); } finally { esconderCarregando(); btnA.disabled = btnB.disabled = false; btnA.textContent = txtA; btnB.textContent = txtB; }
 
     if (d.success) {
         const avisos = (d.warnings || []).join(' ');
         toast(lancar ? ('Venda lançada!' + (avisos ? ' ' + avisos : '')) : 'Rascunho salvo!', avisos ? 'err' : 'ok');
-        // o pagamento só abre quando o usuário tocar em "Pagar" na tela da venda
-        voltarParaVendas();
+        // venda lançada: continua dentro dela (já em modo edição, com o botão Pagar), tudo atualizado
+        if (lancar && d.id) {
+            const ok = await abrirEdicaoVenda(d.id);
+            if (!ok) voltarParaVendas();
+        } else {
+            voltarParaVendas();   // rascunho (orçamento) não é editável no app
+        }
     } else {
         toast(d.error || 'Erro ao salvar a venda.', 'err');
     }
