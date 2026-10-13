@@ -1479,7 +1479,7 @@ async function cancelarVendaAtual() {
     if (!venda || !venda.editId || venda.travada) return;
     if (!(await confirmar({
         icone: '🗑️', titulo: 'Cancelar venda?', perigo: true, ok: 'Cancelar venda', cancelar: 'Voltar',
-        msg: 'Cancelar a venda <b>' + esc(venda.nome || '') + '</b>?<br>Os itens voltam para o estoque e a fatura provisória é cancelada.'
+        msg: 'Os saldos dos itens serão devolvidos ao seu estoque.'
     }))) return;
     const btn = $('btnCancelarVenda');
     btn.disabled = true;
