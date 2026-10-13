@@ -779,7 +779,10 @@ function ir(tela) {
 function abrir(tela) { pilha.push(tela); ir(tela); }
 function voltar() {
     if (pilha.length > 1) pilha.pop();
-    ir(pilha[pilha.length - 1]);
+    const tela = pilha[pilha.length - 1];
+    ir(tela);
+    // voltando para a lista de vendas: atualiza (a venda pode ter sido paga, editada ou cancelada)
+    if (tela === 'vendas') { carregarVendas(); carregarResumoDia(); }
 }
 
 /* ============ Estoque (sempre do local que o usuário escolheu) ============ */
@@ -1221,11 +1224,13 @@ async function criarCliente() {
 }
 
 async function carregarProdutosDoLocal() {
+    const minha = venda;     // se o usuário trocar/sair da venda enquanto carrega, ignora a resposta antiga
     if (!venda.editId) venda.warehouse = String(meuLocal.wh.id);
     const btn = $('nvProdBtn');
     btn.disabled = true;
     btn.textContent = 'Carregando produtos...';
     const d = await api('get_warehouse_products', { warehouse_id: Number(venda.warehouse) });
+    if (venda !== minha) return;
     if (!d.products) { btn.textContent = 'Erro ao carregar'; toast(d.error || 'Erro ao carregar produtos.', 'err'); return; }
     venda.produtos = d.products;
     btn.textContent = d.products.length ? '＋ Adicionar produto' : 'Sem estoque neste local';
@@ -1402,6 +1407,8 @@ async function abrirEdicaoVendaInterno(id) {
     const o = d.order;
     if (o.state !== 'sale' && o.state !== 'done') return falha('Só vendas lançadas podem ser editadas.');
     const linhasOdoo = d.lines || [];
+    // segurança: venda com valor mas sem itens = dados incompletos; não abre vazia (evita salvar e perder os itens)
+    if (linhasOdoo.length === 0 && Number(o.amount_total) > 0) return falha('Os itens da venda não carregaram. Tente abrir novamente.');
     const prodIds = linhasOdoo.map(l => l.product_id[0]);
     if (new Set(prodIds).size !== prodIds.length) return falha('Esta venda tem o mesmo produto em mais de uma linha. Edite-a pelo computador.');
     if (!Array.isArray(o.warehouse_id)) return falha('A venda não tem local de estoque definido.');
