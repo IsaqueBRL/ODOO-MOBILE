@@ -480,6 +480,7 @@ header.bar.is-home::after {
     <button class="btn" id="btnConfirmarVenda" onclick="salvarVenda(true)">Salvar</button>
     <button class="btn sec" id="btnOrcamento" onclick="salvarVenda(false)">Salvar Rascunho</button>
     <button class="btn ok-btn" id="btnPagarVenda" onclick="pagarVendaAtual()" style="display:none">Pagar</button>
+    <button class="btn danger" id="btnReverterVenda" onclick="reverterVendaAtual()" style="display:none">Reverter</button>
     <button class="btn danger" id="btnCancelarVenda" onclick="cancelarVendaAtual()" style="display:none">Cancelar venda</button>
 </section>
 
@@ -1391,9 +1392,10 @@ function aplicarModoTelaVenda() {
     $('nvProdBtn').style.display = travada ? 'none' : '';
     $('btnPagarVenda').style.display = (editando && venda.podePagar) ? '' : 'none';
     $('btnCancelarVenda').style.display = (editando && !travada) ? '' : 'none';
+    $('btnReverterVenda').style.display = (editando && travada) ? '' : 'none';
     const av = $('nvAviso');
     av.style.display = travada ? 'block' : 'none';
-    av.textContent = travada ? 'Fatura paga: a venda está travada. Desfaça o pagamento para editar.' : '';
+    av.textContent = travada ? 'Reverta a venda para fazer ajustes ou cancelar.' : '';
 }
 
 async function abrirEdicaoVenda(id) {
@@ -1473,6 +1475,42 @@ async function pagarVendaAtual() {
     if (!venda || !venda.editId || !venda.invoiceId) return toast('Esta venda não tem fatura para pagar.', 'err');
     if (assinaturaVenda() !== venda.sigOrig) return toast('Há alterações não salvas. Toque em "Salvar alterações" antes de pagar.', 'err');
     await comCarregando('Abrindo pagamento...', () => abrirPagamento(venda.invoiceId, venda.invoiceResidual));
+}
+
+/* Reverter venda paga: cancela os pagamentos em conta e devolve ao cliente, como crédito, o que foi pago com crédito */
+async function reverterVendaAtual() {
+    if (!venda || !venda.editId || !venda.travada) return;
+    const idVenda = venda.editId;
+    const pre = await comCarregando('Verificando pagamentos...', () => api('preview_revert_sale', { order_id: idVenda }));
+    if (pre.error) return toast(pre.error, 'err');
+    if (!venda || venda.editId !== idVenda) return;
+    const pg = pre.pagamentos || [];
+    const cred = Number(pre.credito) || 0;
+    if (pg.length === 0 && cred <= 0.004) {
+        toast('Não encontrei pagamentos para reverter. Atualizando a venda...', 'err');
+        await abrirEdicaoVenda(idVenda);
+        return;
+    }
+    let msg = 'Os pagamentos desta venda serão <b>cancelados</b> e ela volta a ficar em aberto, para você ajustar ou cancelar.';
+    if (pg.length) msg += '<div style="text-align:left;margin:12px 0 0;font-size:14px">' + pg.map(x =>
+        '• ' + esc(x.conta || 'Conta') + ': <b>' + brl(x.valor) + '</b>').join('<br>') + '</div>';
+    if (cred > 0.004) msg += '<div style="margin-top:10px;font-size:14px">' + brl(cred) + ' pagos com crédito voltam como <b>crédito do cliente</b>.</div>';
+    if (!(await confirmar({ icone: '↩️', titulo: 'Reverter venda?', perigo: true, ok: 'Reverter', cancelar: 'Voltar', msg }))) return;
+
+    const d = await comCarregando('Revertendo pagamentos...', () => api('revert_sale_payments', { order_id: idVenda }));
+    if (d.error) {
+        const parte = d.parcial ? ' Parte já foi revertida; a venda foi atualizada, confira e tente de novo.' : '';
+        toast(d.error + parte, 'err');
+    } else {
+        const n = (d.cancelados || []).length, c = Number(d.credito_devolvido) || 0;
+        const partes = [];
+        if (n) partes.push(n + ' pagamento(s) cancelado(s)');
+        if (c > 0.004) partes.push(brl(c) + ' devolvido(s) como crédito do cliente');
+        toast('Venda revertida. ' + partes.join(' · '), 'ok');
+    }
+    // recarrega a venda para refletir o novo estado (travada ou liberada)
+    const ok = await abrirEdicaoVenda(idVenda);
+    if (!ok) voltarParaVendas();
 }
 
 async function cancelarVendaAtual() {
