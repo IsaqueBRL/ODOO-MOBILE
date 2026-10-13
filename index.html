@@ -1564,7 +1564,9 @@ async function salvarEdicaoVenda() {
     if (d.success) {
         const avisos = (d.warnings || []).join(' ');
         toast('Venda atualizada!' + (avisos ? ' ' + avisos : ''), avisos ? 'err' : 'ok');
-        voltarParaVendas();
+        // continua na venda: recarrega do Odoo para mostrar tudo atualizado (itens, total, fatura)
+        const ok = await abrirEdicaoVenda(venda.editId);
+        if (!ok) voltarParaVendas();
     } else {
         toast(d.error || 'Erro ao salvar as alterações.', 'err');
     }
