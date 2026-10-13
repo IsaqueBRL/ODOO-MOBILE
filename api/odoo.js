@@ -1621,6 +1621,10 @@ export default async function handler(req, res) {
             if (body.order_status && statusGroups[body.order_status]) {
                 domain.push(['state', 'in', statusGroups[body.order_status]]);
             }
+            // "Últimas": nunca mostra vendas canceladas (elas só aparecem no filtro próprio)
+            if (body.exclude_cancel) {
+                domain.push(['state', '!=', 'cancel']);
+            }
 
             const limiteTela = Math.min(Math.max(parseInt(body.limit, 10) || 100, 1), 1000);
             const orders = await execute("sale.order", "search_read", [domain], {
