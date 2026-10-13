@@ -12,20 +12,42 @@ let cachedUid = null;
 let uidPromise = null;
 let forcedAccountIdCache = null;
 
-async function rpc(service, method, args) {
-    const r = await fetch(ODOO_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", method: "call", params: { service, method, args }, id: Date.now() })
-    });
-    return r.json();
+// Métodos que só leem dados: podem ser repetidos sem risco quando a conexão com o Odoo falha por um instante
+const READ_METHODS = new Set(["search_read", "read", "search_count", "fields_get", "read_group", "name_search", "search"]);
+
+// 1 tentativa para escritas (nunca repete: evita lançar duas vezes); 3 para leituras, com tempo limite
+async function rpc(service, method, args, idempotent = false) {
+    const tentativas = idempotent ? 3 : 1;
+    let ultimo;
+    for (let t = 0; t < tentativas; t++) {
+        const ctl = new AbortController();
+        const to = setTimeout(() => ctl.abort(), idempotent ? 20000 : 45000);
+        try {
+            const r = await fetch(ODOO_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ jsonrpc: "2.0", method: "call", params: { service, method, args }, id: Date.now() }),
+                signal: ctl.signal
+            });
+            if (idempotent && (r.status >= 500 || r.status === 429) && t < tentativas - 1) {
+                ultimo = new Error("Odoo respondeu " + r.status);
+                await new Promise(ok => setTimeout(ok, 300 * (t + 1)));
+                continue;
+            }
+            return await r.json();
+        } catch (e) {
+            ultimo = e.name === "AbortError" ? new Error("O Odoo demorou demais para responder.") : e;
+            if (t < tentativas - 1) await new Promise(ok => setTimeout(ok, 300 * (t + 1)));
+        } finally { clearTimeout(to); }
+    }
+    throw ultimo || new Error("Falha ao conectar com o Odoo.");
 }
 
 // Autentica UMA vez e reaproveita o uid (antes eram 2 chamadas ao Odoo a cada clique)
 function getUid() {
     if (cachedUid) return Promise.resolve(cachedUid);
     if (!uidPromise) {
-        uidPromise = rpc("common", "authenticate", [ODOO_DB, ODOO_USER, ODOO_API_KEY, {}])
+        uidPromise = rpc("common", "authenticate", [ODOO_DB, ODOO_USER, ODOO_API_KEY, {}], true)
             .then(d => { if (d.result) cachedUid = d.result; return d.result; })
             .finally(() => { uidPromise = null; });
     }
@@ -33,7 +55,7 @@ function getUid() {
 }
 
 const execute = (model, method, args, kwargs = {}) =>
-    rpc("object", "execute_kw", [ODOO_DB, cachedUid, ODOO_API_KEY, model, method, args, kwargs]).then(d => {
+    rpc("object", "execute_kw", [ODOO_DB, cachedUid, ODOO_API_KEY, model, method, args, kwargs], READ_METHODS.has(method)).then(d => {
         if (d.error) {
             const errData = d.error.data || {};
             const msg = errData.message || errData.debug || d.error.message || `Erro desconhecido do Odoo ao chamar ${model}.${method}`;
@@ -1684,30 +1706,34 @@ export default async function handler(req, res) {
             const { order_id } = body;
             const oid = Number(order_id);
 
-            // Tudo que não depende do resultado do pedido já sai em paralelo.
-            // Listas de apoio vêm do cache; a lista de parceiros foi removida (o site não a usa aqui).
-            const [orders, lines, paymentTerms, products, warehouses] = await Promise.all([
+            // Pedido e linhas em paralelo. Erros NÃO são engolidos: antes, uma falha momentânea nas linhas virava
+            // "lista vazia" e a venda abria sem os itens (só aparecendo ao sair e voltar).
+            const [orders, lines] = await Promise.all([
                 execute("sale.order", "search_read", [[["id", "=", oid]]], {
                     fields: ["id", "name", "partner_id", "payment_term_id", "order_line", "state", "amount_total", "warehouse_id", "invoice_ids", "invoice_status", "date_order", "validity_date"]
                 }),
                 execute("sale.order.line", "search_read", [[["order_id", "=", oid], ["display_type", "=", false]]], {
                     fields: ["id", "product_id", "product_uom_qty", "price_unit", "price_subtotal", "discount"]
-                }).catch(() => []),
-                lookups.paymentTerms().catch(() => []),
-                lookups.saleProducts().catch(() => []),
-                lookups.warehouses().catch(() => [])
+                })
             ]);
             if (!orders || orders.length === 0) return res.status(404).json({ error: "Pedido de venda não encontrado." });
 
             const order = orders[0];
+            let linhas = lines || [];
+            // confere com a contagem do próprio pedido; se vier incompleto, busca de novo uma vez
+            if (linhas.length === 0 && Array.isArray(order.order_line) && order.order_line.length > 0) {
+                linhas = (await execute("sale.order.line", "search_read", [[["order_id", "=", oid], ["display_type", "=", false]]], {
+                    fields: ["id", "product_id", "product_uom_qty", "price_unit", "price_subtotal", "discount"]
+                })) || [];
+                if (linhas.length === 0) return res.status(502).json({ error: "Não consegui carregar os itens da venda. Tente abrir novamente." });
+            }
             const invoices = (order.invoice_ids && order.invoice_ids.length > 0)
-                ? await execute("account.move", "search_read", [[["id", "in", order.invoice_ids]]], { fields: ["id", "name", "state", "payment_state", "amount_total", "amount_residual", "invoice_date_due"] }).catch(() => [])
+                ? await execute("account.move", "search_read", [[["id", "in", order.invoice_ids]]], { fields: ["id", "name", "state", "payment_state", "amount_total", "amount_residual", "invoice_date_due"] })
                 : [];
 
-            return res.status(200).json({ order, lines: lines || [], payment_terms: paymentTerms || [], products: products || [], warehouses: warehouses || [], invoices: invoices || [] });
+            return res.status(200).json({ order, lines: linhas, invoices: invoices || [] });
         }
 
-        // AÇÃO: BUSCAR LOCAIS DE ESTOQUE INTERNOS (PARA TRANSFERÊNCIAS)
         if (action === "get_locations") {
             const locations = await lookups.locations();
             return res.status(200).json({ result: (locations || []).slice().sort((a, b) => (a.complete_name || "").localeCompare(b.complete_name || "", "pt-BR")) });
