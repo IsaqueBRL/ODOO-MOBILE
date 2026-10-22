@@ -3,7 +3,8 @@
 // Guarda só o "shell" (HTML, manifest e ícones). Os dados (estoque, vendas, clientes)
 // vêm sempre da API /api/odoo em tempo real, então o app precisa de internet para funcionar de verdade.
 
-const CACHE_NAME = "deuris-mobile-v1";
+const CACHE_NAME = "deuris-mobile-v2";
+const TEMPO_REDE_MS = 3000;   // rede lenta: depois disso usa a cópia guardada, em vez de deixar o app travado
 const SHELL = ["/", "/index.html", "/manifest.json", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -34,18 +35,25 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith("/api/")) return;
 
-  // Rede primeiro (sempre a versão mais nova); se estiver offline, usa o cache.
-  event.respondWith(
-    fetch(req)
-      .then((response) => {
-        if (response.ok) {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(req, clone));
-        }
-        return response;
-      })
-      .catch(() =>
-        caches.match(req).then((hit) => hit || (req.mode === "navigate" ? caches.match("/index.html") : undefined))
-      )
-  );
+  // Rede primeiro (sempre a versão mais nova). Se a rede falhar OU demorar mais de 3 s, usa a cópia guardada.
+  event.respondWith((async () => {
+    const guardada = () => caches.match(req).then((hit) => hit || (req.mode === "navigate" ? caches.match("/index.html") : undefined));
+    const rede = fetch(req).then((response) => {
+      if (response && response.status === 200 && response.type === "basic") {
+        const clone = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(req, clone)).catch(() => {});
+      }
+      return response;
+    });
+    try {
+      return await Promise.race([
+        rede,
+        new Promise((_, falha) => setTimeout(() => falha(new Error("lento")), TEMPO_REDE_MS))
+      ]);
+    } catch (e) {
+      const hit = await guardada();
+      if (hit) { rede.catch(() => {}); return hit; }
+      return rede;     // sem cópia guardada: espera a rede mesmo assim
+    }
+  })());
 });

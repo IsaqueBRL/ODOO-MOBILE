@@ -21,7 +21,7 @@
 /* sem zoom (pinça e toque duplo): o site se comporta como um app */
 html, body { touch-action: pan-x pan-y; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 html, body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-body { padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
+body { padding-bottom: calc(100px + env(safe-area-inset-bottom, 0px)); }   /* espaço para a bola flutuante não cobrir o último item */
 
 header.bar {
     position: sticky; top: 0; z-index: 10; background: var(--primary); color: #fff;
@@ -136,16 +136,8 @@ input[disabled] { background: #f0f0f0; color: #555; }
 .prod-vazio { padding: 14px; text-align: center; color: #666; font-size: 14px; }
 
 /* Botão de local (cabeçalho) */
-.btn-local { flex: 1; display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,.18); color: #fff; border: none; border-radius: 12px; padding: 11px 14px; font-size: 17px; font-weight: 700; cursor: pointer; text-align: left; min-width: 0; }
-.btn-local span.nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip-local { display: none; background: rgba(255,255,255,.18); color: #fff; border: none; border-radius: 999px; padding: 8px 12px; font-size: 13px; font-weight: 700; cursor: pointer; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-@keyframes pulsoLocal {
-    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(255,255,255,0); }
-    50% { opacity: .72; box-shadow: 0 0 0 4px rgba(255,255,255,.22); }
-}
-.btn-local, .chip-local { animation: pulsoLocal 2.6s ease-in-out infinite; }
-@media (prefers-reduced-motion: reduce) { .btn-local, .chip-local { animation: none; } }
 
 /* Bola flutuante: Nova venda */
 .fab { position: fixed; right: 18px; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); width: 66px; height: 66px; border-radius: 50%; border: none; background: var(--primary); color: #fff; font-size: 30px; box-shadow: 0 6px 16px rgba(0,0,0,.3); cursor: pointer; z-index: 20; display: none; align-items: center; justify-content: center; }
@@ -270,14 +262,7 @@ input[disabled] { background: #f0f0f0; color: #555; }
 /* ===== Marca "INTEGRADOR" na tela inicial ===== */
 header.bar { overflow: hidden; }
 header.bar.is-home {
-    background: linear-gradient(120deg, #4a2f43 0%, #714B67 35%, #9a6a8d 55%, #714B67 75%, #4a2f43 100%);
-    background-size: 260% 100%;
-    animation: hdrFlow 9s ease-in-out infinite alternate;
-}
-header.bar.is-home::after {
-    content: ''; position: absolute; top: 0; bottom: 0; left: -90px; width: 60px; pointer-events: none;
-    background: linear-gradient(100deg, transparent, rgba(255,255,255,.22), transparent);
-    transform: skewX(-20deg); animation: hdrSweep 6s ease-in-out infinite;
+    background: linear-gradient(120deg, #4a2f43 0%, #714B67 45%, #9a6a8d 70%, #714B67 100%);
 }
 .brand {
     display: inline-flex; align-items: center; gap: 10px; font-size: 21px; font-weight: 800;
@@ -287,16 +272,11 @@ header.bar.is-home::after {
     background: linear-gradient(90deg, #fff 0%, #f7d8ef 25%, #fff 50%, #f7d8ef 75%, #fff 100%);
     background-size: 200% 100%; -webkit-background-clip: text; background-clip: text;
     color: transparent; -webkit-text-fill-color: transparent;
-    animation: brandShine 3.5s linear infinite; filter: drop-shadow(0 0 8px rgba(255,255,255,.35));
 }
 .brand .brand-dot {
     width: 10px; height: 10px; border-radius: 50%; background: #ffd6f3; flex: none;
-    box-shadow: 0 0 10px 2px rgba(255,214,243,.8); animation: brandPulse 2.2s ease-in-out infinite;
+    box-shadow: 0 0 10px 2px rgba(255,214,243,.8);
 }
-@keyframes hdrFlow { from { background-position: 0% 0; } to { background-position: 100% 0; } }
-@keyframes hdrSweep { 0%, 55% { left: -90px; } 100% { left: 115%; } }
-@keyframes brandShine { from { background-position: 200% 0; } to { background-position: 0% 0; } }
-@keyframes brandPulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(.65); opacity: .6; } }
 @media (prefers-reduced-motion: reduce) {
     header.bar.is-home, header.bar.is-home::after, .brand .brand-txt, .brand .brand-dot { animation: none; }
 }
@@ -362,7 +342,6 @@ header.bar.is-home::after {
 
 <header class="bar">
     <button class="btn-back" id="btnBack" onclick="voltar()" aria-label="Voltar">←</button>
-    <button class="btn-local" id="btnLocal" onclick="abrirSeletorLocal()"><span>📍</span><span class="nm" id="btnLocalNome">Escolher local</span><span>▾</span></button>
     <h1 id="titulo" style="display:none">Estoque</h1>
     <button class="chip-local" id="chipLocal" onclick="abrirSeletorLocal()">📍 Local</button>
 </header>
@@ -585,6 +564,13 @@ header.bar.is-home::after {
 /* ============ Utilidades ============ */
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// Lê números digitados no padrão brasileiro: "1.234,50" -> 1234.5, "10,5" -> 10.5, "10.5" -> 10.5
+const parseBR = v => {
+    let t = String(v ?? '').trim().replace(/\s/g, '');
+    if (t.includes(',')) t = t.replace(/\./g, '').replace(',', '.');
+    const n = parseFloat(t);
+    return Number.isFinite(n) ? n : 0;
+};
 const brl = n => 'R$ ' + (Number(n) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 function dataHora(v) {
@@ -686,12 +672,11 @@ function debounce(k, fn, ms = 450) { clearTimeout(timers[k]); timers[k] = setTim
 let meuLocal = null;           // { wh: {id, name}, loc: {id, name} | null }
 let armazensCache = null;
 let aoEscolherLocal = null;
+try { armazensCache = JSON.parse(localStorage.getItem('deuris_armazens') || 'null'); } catch (e) { armazensCache = null; }
 
 try { meuLocal = JSON.parse(localStorage.getItem('deuris_meu_local') || 'null'); } catch (e) { meuLocal = null; }
 
 function atualizarRotuloLocal() {
-    const nome = meuLocal ? meuLocal.wh.name : 'Escolher local';
-    $('btnLocalNome').textContent = nome;
     $('chipLocal').textContent = '📍 ' + (meuLocal ? meuLocal.wh.name : 'Escolher');
 }
 
@@ -700,25 +685,32 @@ function exigirLocal(cb) {
     abrirSeletorLocal(true, cb);
 }
 
+function desenharSeletorLocal() {
+    $('sheetLista').innerHTML = (armazensCache || []).map(w => `
+        <button class="opt ${meuLocal && meuLocal.wh.id === w.id ? 'on' : ''}" onclick="escolherLocal(${w.id})">
+            <span>${esc(w.name)}</span><span>${meuLocal && meuLocal.wh.id === w.id ? '✓' : ''}</span>
+        </button>`).join('');
+}
+
 async function abrirSeletorLocal(obrigatorio, cb) {
     aoEscolherLocal = cb || null;
     $('sheetCancelar').style.display = obrigatorio ? 'none' : 'block';
     $('sheetBg').dataset.obrigatorio = obrigatorio ? '1' : '';
     $('sheetBg').classList.add('show');
-    $('sheetLista').innerHTML = '<div class="status">Carregando...</div>';
 
-    if (!armazensCache) {
-        const d = await api('get_warehouses');
-        if (!d.result) {
-            $('sheetLista').innerHTML = '<div class="status">' + esc(d.error || 'Não foi possível carregar os locais.') + '</div>';
-            return;
-        }
+    // já tem a lista guardada: mostra na hora e atualiza em segundo plano
+    if (armazensCache && armazensCache.length) desenharSeletorLocal();
+    else $('sheetLista').innerHTML = '<div class="status">Carregando...</div>';
+
+    const d = await api('get_warehouses');
+    if (d.result) {
         armazensCache = d.result;
+        try { localStorage.setItem('deuris_armazens', JSON.stringify(armazensCache)); } catch (e) {}
+        desenharSeletorLocal();
+    } else if (!armazensCache || !armazensCache.length) {
+        $('sheetLista').innerHTML = '<div class="status">' + esc(d.error || 'Não foi possível carregar os locais.') +
+            '</div><button class="opt" onclick="abrirSeletorLocal(' + (obrigatorio ? 'true' : 'false') + ', aoEscolherLocal)"><span>↻ Tentar de novo</span></button>';
     }
-    $('sheetLista').innerHTML = armazensCache.map(w => `
-        <button class="opt ${meuLocal && meuLocal.wh.id === w.id ? 'on' : ''}" onclick="escolherLocal(${w.id})">
-            <span>${esc(w.name)}</span><span>${meuLocal && meuLocal.wh.id === w.id ? '✓' : ''}</span>
-        </button>`).join('');
 }
 
 function fecharSeletorLocal() {
@@ -747,6 +739,7 @@ function escolherLocal(id) {
         if (tela === 'novaVenda' && venda) carregarProdutosDoLocal();       // trocou o local no meio da venda
         else if (tela === 'estoque') buscarEstoque();
         else if (tela === 'vendas') { carregarVendas(); carregarResumoDia(); }
+        else if (tela === 'transfer') carregarHistoricoTransf();
     }
 }
 
@@ -765,26 +758,75 @@ function ir(tela) {
     if (tela === 'novaVenda' && venda && venda.editId) {
         const s = venda.estado;
         const bd = s === 'cancel' ? '<span class="badge b-bad">Cancelada</span>'
-            : venda.travada ? '<span class="badge b-ok">Pago</span>'
+            : venda.travada ? (venda.quitada ? '<span class="badge b-ok">Pago</span>' : '<span class="badge b-yellow">Parcial</span>')
             : (s === 'sale' || s === 'done') ? '<span class="badge b-yellow">Confirmada</span>'
             : '<span class="badge b-grey">Orçamento</span>';
         $('titulo').insertAdjacentHTML('beforeend', bd);
     }
     $('titulo').style.display = 'block';
-    $('btnLocal').style.display = 'none';
     $('chipLocal').style.display = 'inline-block';
     $('btnBack').classList.toggle('show', !home);
     $('fab').classList.toggle('show', ['home', 'vendas'].includes(tela));
     window.scrollTo(0, 0);
 }
-function abrir(tela) { pilha.push(tela); ir(tela); }
-function voltar() {
+// Cada tela aberta entra também no histórico do navegador: assim o botão Voltar do celular volta uma tela
+// (antes ele fechava o app). histTam = quantas entradas nossas existem no histórico.
+let histTam = 0, navIgnorar = false;
+try { history.replaceState({ d: 0 }, ''); } catch (e) {}
+
+function abrir(tela) {
+    pilha.push(tela);
+    try { history.pushState({ d: pilha.length - 1 }, ''); histTam++; } catch (e) {}
+    ir(tela);
+}
+// Alinha o histórico com a pilha quando o app troca de tela sem passar por abrir()/voltar()
+function sincronizarHistorico() {
+    const alvo = pilha.length - 1;
+    if (histTam > alvo) {
+        const n = histTam - alvo;
+        histTam = alvo;
+        navIgnorar = true;
+        try { history.go(-n); } catch (e) { navIgnorar = false; }
+    }
+}
+function aplicarVoltar() {
     if (pilha.length > 1) pilha.pop();
+    histTam = pilha.length - 1;
     const tela = pilha[pilha.length - 1];
     ir(tela);
     // voltando para a lista de vendas: atualiza (a venda pode ter sido paga, editada ou cancelada)
     if (tela === 'vendas') { carregarVendas(); carregarResumoDia(); }
 }
+function voltar() {
+    if (pilha.length <= 1) return;
+    if (histTam > 0) history.back(); else aplicarVoltar();   // o resto acontece no 'popstate'
+}
+// Telas com algo digitado que ainda não foi salvo
+function telaSuja() {
+    const t = pilha[pilha.length - 1];
+    if (t === 'novaVenda' && venda) return venda.editId ? (!venda.travada && assinaturaVenda() !== venda.sigOrig) : (venda.linhas.length > 0 || !!venda.partner);
+    if (t === 'transfer') return trf.linhas.some(l => l.pid);
+    return false;
+}
+window.addEventListener('popstate', async () => {
+    if (navIgnorar) { navIgnorar = false; return; }
+    const repor = () => { try { history.pushState({ d: pilha.length - 1 }, ''); } catch (e) {} };
+    // janela aberta: o Voltar fecha a janela, não a tela
+    const janelas = [['cfBg', () => fecharConfirmar(false)], ['payBg', descartarPagamento], ['ajBg', fecharAjuste], ['addBg', fecharAdicionar],
+        ['trpBg', () => $('trpBg').classList.remove('show')], ['sheetBg', fecharSeletorLocal]];
+    for (const [id, fechar] of janelas) {
+        if ($(id).classList.contains('show')) { repor(); fechar(); return; }
+    }
+    if (pilha.length <= 1) return;
+    if (telaSuja()) {
+        repor();    // desfaz o "voltar" enquanto pergunta
+        const sair = await confirmar({ icone: '⚠️', titulo: 'Sair sem salvar?', msg: 'Há alterações que ainda não foram salvas e serão perdidas.', ok: 'Sair', cancelar: 'Ficar', perigo: true });
+        if (!sair) return;
+        navIgnorar = true;
+        history.back();
+    }
+    aplicarVoltar();
+});
 
 /* ============ Estoque (sempre do local que o usuário escolheu) ============ */
 let estReq = 0;
@@ -856,7 +898,7 @@ function renderEstoque() {
     $('estLista').innerHTML = itens.map(i => `
         <div class="tab-row click" onclick="abrirAjuste(${i.id})">
             <div class="d">${esc(i.nome)}</div>
-            <div class="q${i.qtd <= 0 ? ' zero' : ''}"><b>${i.qtd}</b>un.</div>
+            <div class="q${i.qtd <= 0 ? ' zero' : ''}"><b>${fmtQtd(i.qtd)}</b>un.</div>
         </div>`).join('');
 }
 
@@ -878,7 +920,7 @@ function fecharAjuste() { $('ajBg').classList.remove('show'); ajProduto = null; 
 
 async function salvarAjuste() {
     if (!ajProduto) return;
-    const qtd = parseFloat(String($('ajQtd').value).replace(',', '.'));
+    const qtd = parseBR($('ajQtd').value);
     if (isNaN(qtd) || qtd < 0) return toast('Informe uma quantidade válida (0 ou mais).', 'err');
     if (qtd === ajProduto.atual) return fecharAjuste();
     if (!(await garantirLocalDeEstoque())) return toast('Não foi possível identificar o local de estoque.', 'err');
@@ -890,6 +932,7 @@ async function salvarAjuste() {
     btn.textContent = 'Salvar';
     if (d.success) {
         fecharAjuste();
+        prodCache = {};
         toast('Estoque ajustado!', 'ok');
         buscarEstoque();
     } else {
@@ -1015,7 +1058,7 @@ function removerLinhaTransf(uid) {
 function mudarQtdTransf(uid, v) {
     const l = trf.linhas.find(x => x.uid === uid);
     if (!l) return;
-    l.qty = parseFloat(String(v).replace(',', '.')) || 0;
+    l.qty = parseBR(v);
     const w = document.getElementById('trw' + uid);
     if (w) w.textContent = l.pid && l.qty > l.estoque ? 'Atenção: só há ' + fmtQtd(l.estoque) + ' un em estoque.' : '';
 }
@@ -1067,6 +1110,12 @@ async function salvarTransferencia() {
         if (!(l.qty > 0)) return toast('Informe a quantidade de ' + l.nome + '.', 'err');
         if (l.qty > l.estoque) return toast(l.nome + ': só há ' + fmtQtd(l.estoque) + ' un em estoque.', 'err');
     }
+    const nomeLoc = id => { const o = Array.from($('trOrigem').options).concat(Array.from($('trDestino').options)).find(x => x.value === String(id)); return o ? o.textContent : ''; };
+    const resumo = linhas.map(l => '• ' + esc(l.nome) + ': <b>' + fmtQtd(l.qty) + '</b> un.').join('<br>');
+    if (!(await confirmar({
+        icone: '🔁', titulo: 'Confirmar transferência?', ok: 'Transferir', cancelar: 'Voltar',
+        msg: '<b>' + esc(nomeLoc(trf.origem)) + '</b> &gt; <b>' + esc(nomeLoc(trf.destino)) + '</b><div style="text-align:left;margin-top:12px;font-size:14px">' + resumo + '</div>'
+    }))) return;
     const btn = $('trSalvar');
     btn.disabled = true;
     btn.textContent = 'Transferindo...';
@@ -1078,6 +1127,7 @@ async function salvarTransferencia() {
     btn.disabled = false;
     btn.textContent = '🔁 Transferir Estoque';
     if (d.success) {
+        prodCache = {};
         toast('Transferência concluída!', 'ok');
         trf.linhas = [];
         adicionarLinhaTransf();
@@ -1119,24 +1169,32 @@ function escolherStatus(st) {
     carregarVendas();
 }
 
-async function carregarVendas() {
+let venAcum = [];      // vendas já carregadas (a lista cresce com "Carregar mais")
+async function carregarVendas(mais) {
     const query = $('venBusca').value.trim();
     const req = ++venReq;
     if (!venStatus) venStatus = 'last';
+    if (!mais) venAcum = [];
     $('venStatus').textContent = 'Carregando...';
-    $('venLista').innerHTML = [1, 2, 3].map(() => '<div class="card sk"><div class="skel" style="width:55%;height:18px"></div><div class="skel" style="width:30%"></div><div class="skel" style="width:20%"></div><div class="skel" style="width:28%;height:22px;border-radius:999px"></div></div>').join('');
-    // Últimas = 5 mais recentes, sem canceladas (ao pesquisar, mostra até 100); Todas = todas as vendas
-    const limite = venStatus === 'last' ? (query ? 100 : 5) : (venStatus === 'all' ? 1000 : 100);
-    const d = await api('get_sales', { query, limit: limite, warehouse_id: meuLocal ? meuLocal.wh.id : '', order_status: (venStatus === 'last' || venStatus === 'all') ? '' : venStatus, exclude_cancel: venStatus === 'last' });
+    if (mais) { const b = $('venMais'); if (b) { b.disabled = true; b.textContent = 'Carregando...'; } }
+    else $('venLista').innerHTML = [1, 2, 3].map(() => '<div class="card sk"><div class="skel" style="width:55%;height:18px"></div><div class="skel" style="width:30%"></div><div class="skel" style="width:20%"></div><div class="skel" style="width:28%;height:22px;border-radius:999px"></div></div>').join('');
+    // Últimas = 5 mais recentes, sem canceladas (ao pesquisar, mostra até 100); os outros filtros vêm de 50 em 50
+    const limite = venStatus === 'last' ? (query ? 100 : 5) : 50;
+    const d = await api('get_sales', { query, limit: limite, offset: mais ? venAcum.length : 0, warehouse_id: meuLocal ? meuLocal.wh.id : '', order_status: (venStatus === 'last' || venStatus === 'all') ? '' : venStatus, exclude_cancel: venStatus === 'last' });
     if (req !== venReq) return;
-    if (!d.result) { $('venLista').innerHTML = ''; $('venStatus').textContent = d.error || 'Erro ao carregar vendas.'; return; }
-    if (d.result.length === 0) { $('venLista').innerHTML = ''; $('venStatus').textContent = 'Nenhuma venda encontrada.'; return; }
+    if (!d.result) {
+        if (mais) { const b = $('venMais'); if (b) { b.disabled = false; b.textContent = 'Carregar mais'; } $('venStatus').textContent = venAcum.length + ' venda(s)'; toast(d.error || 'Erro ao carregar vendas.', 'err'); return; }
+        $('venLista').innerHTML = ''; $('venStatus').textContent = d.error || 'Erro ao carregar vendas.'; return;
+    }
+    venAcum = venAcum.concat(d.result);
+    if (venAcum.length === 0) { $('venLista').innerHTML = ''; $('venStatus').textContent = 'Nenhuma venda encontrada.'; return; }
+    d.result = venAcum;
     $('venStatus').textContent = d.result.length + ' venda(s)';
 
     // Um único status por venda: Orçamento (cinza) > Confirmada (amarelo) > Pago (verde)
     const stBadge = o => o.state === 'cancel' ? '<span class="badge b-bad">Cancelada</span>'
         : (o.state === 'sale' || o.state === 'done')
-            ? (o.payment_summary === 'pago' ? '<span class="badge b-ok">Pago</span>' : '<span class="badge b-yellow">Confirmada</span>')
+            ? (o.payment_summary === 'pago' ? '<span class="badge b-ok">Pago</span>' : o.payment_summary === 'parcial' ? '<span class="badge b-yellow">Parcial</span>' : '<span class="badge b-yellow">Confirmada</span>')
         : '<span class="badge b-grey">Orçamento</span>';
 
     // Sempre da data mais recente para a mais antiga
@@ -1149,7 +1207,7 @@ async function carregarVendas() {
             <div class="dt">${dataCurta(o.date_order)}</div>
             <div class="num">${esc(o.name)}</div>
             <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap">${stBadge(o)}</div>
-        </div>`).join('');
+        </div>`).join('') + ((d.has_more && (venStatus !== 'last' || query)) ? '<button class="btn sec" id="venMais" onclick="carregarVendas(true)">Carregar mais</button>' : '');
 }
 
 /* ============ Nova venda ============ */
@@ -1169,12 +1227,18 @@ function dataVendaISO() {
     return new Date(y, m - 1, d, n.getHours(), n.getMinutes()).toISOString();
 }
 
+// Chave única de cada venda nova: se a internet cair e o envio for repetido, o servidor não duplica a venda
+function novaChave() {
+    try { if (crypto.randomUUID) return crypto.randomUUID(); } catch (e) {}
+    return 'k' + Date.now().toString(36) + Math.random().toString(36).slice(2, 12);
+}
+
 function abrirNovaVenda() {
     exigirLocal(iniciarNovaVenda);
 }
 
 async function iniciarNovaVenda() {
-    venda = { partner: null, warehouse: String(meuLocal.wh.id), produtos: [], linhas: [], data: dataLocalAgora().slice(0, 10), venc: dataLocalAgora().slice(0, 10) };
+    venda = { chave: novaChave(), partner: null, warehouse: String(meuLocal.wh.id), produtos: [], linhas: [], data: dataLocalAgora().slice(0, 10), venc: dataLocalAgora().slice(0, 10) };
     $('nvData').value = venda.data;
     $('nvVenc').value = venda.venc;
     atualizarTextoDatas();
@@ -1211,7 +1275,7 @@ async function buscarCliente() {
     if (!q) { box.innerHTML = ''; return; }
     const d = await api('search_partners', { query: q });
     if (req !== nvBuscaReq || !$('nvCliRes')) return;
-    const itens = (d.partners || []).map(p => `<button onclick="escolherCliente(${p.id}, decodeURIComponent('${encodeURIComponent(p.name)}'))">${esc(p.name)}</button>`).join('');
+    const itens = (d.partners || []).map(p => `<button data-id="${p.id}" data-nome="${esc(p.name)}" onclick="escolherCliente(Number(this.dataset.id), this.dataset.nome)">${esc(p.name)}</button>`).join('');
     box.innerHTML = `<div class="results">${itens}<button class="new" onclick="criarCliente()">+ Criar cliente "${esc(q)}"</button></div>`;
 }
 function escolherCliente(id, name) { venda.partner = { id, name }; renderCliente(); }
@@ -1224,36 +1288,51 @@ async function criarCliente() {
     else toast(d.error || 'Não foi possível criar o cliente.', 'err');
 }
 
-async function carregarProdutosDoLocal() {
-    const minha = venda;     // se o usuário trocar/sair da venda enquanto carrega, ignora a resposta antiga
-    if (!venda.editId) venda.warehouse = String(meuLocal.wh.id);
+let prodCache = {};      // { [id do local]: lista de produtos } — abre a seleção na hora e atualiza por baixo
+
+function aplicarProdutosDoLocal(minha, products, fresco) {
     const btn = $('nvProdBtn');
-    btn.disabled = true;
-    btn.textContent = 'Carregando produtos...';
-    const d = await api('get_warehouse_products', { warehouse_id: Number(venda.warehouse) });
-    if (venda !== minha) return;
-    if (!d.products) { btn.textContent = 'Erro ao carregar'; toast(d.error || 'Erro ao carregar produtos.', 'err'); return; }
-    venda.produtos = d.products;
-    btn.textContent = d.products.length ? '＋ Adicionar produto' : 'Sem estoque neste local';
-    btn.disabled = d.products.length === 0;
+    venda.produtos = products;
+    btn.textContent = products.length ? '＋ Adicionar produto' : 'Sem estoque neste local';
+    btn.disabled = products.length === 0;
     renderListaProdutos();
 
     // editando uma venda lançada: o estoque disponível das linhas antigas é o do local + o que a própria venda já separou
     if (venda.editId) {
         venda.linhas.forEach(l => {
             if (!l.lineId) return;
-            const p = d.products.find(x => x.id === l.id);
+            const p = products.find(x => x.id === l.id);
             l.estoque = (p ? p.stock_qty : 0) + (l.qtyOrig || 0);
         });
         renderLinhas();
         return;
     }
+    if (!fresco) { renderLinhas(); return; }     // lista guardada: não remove itens com base em dado possivelmente velho
 
     // remove das linhas os produtos que não existem neste local
     const antes = venda.linhas.length;
-    venda.linhas = venda.linhas.filter(l => d.products.some(p => p.id === l.id));
+    venda.linhas = venda.linhas.filter(l => products.some(p => p.id === l.id));
     if (venda.linhas.length < antes) toast('Itens sem estoque neste local foram removidos.', 'err');
     renderLinhas();
+}
+
+async function carregarProdutosDoLocal() {
+    const minha = venda;     // se o usuário trocar/sair da venda enquanto carrega, ignora a resposta antiga
+    if (!venda.editId) venda.warehouse = String(meuLocal.wh.id);
+    const wh = venda.warehouse;
+    const btn = $('nvProdBtn');
+    const guardado = prodCache[wh];
+    if (guardado) aplicarProdutosDoLocal(minha, guardado, false);
+    else { btn.disabled = true; btn.textContent = 'Carregando produtos...'; }
+    const d = await api('get_warehouse_products', { warehouse_id: Number(wh) });
+    if (venda !== minha) return;
+    if (!d.products) {
+        if (!guardado) btn.textContent = 'Erro ao carregar';
+        toast(d.error || 'Erro ao carregar produtos.', 'err');
+        return;
+    }
+    prodCache[wh] = d.products;
+    aplicarProdutosDoLocal(minha, d.products, true);
 }
 
 function abrirListaProdutos() {
@@ -1269,7 +1348,7 @@ function renderListaProdutos() {
     const q = ($('nvProdBusca').value || '').trim().toLowerCase();
     const itens = (venda.produtos || []).filter(p => p.display_name.toLowerCase().includes(q));
     $('nvProdBody').innerHTML = itens.length
-        ? itens.map(p => `<button type="button" class="prod-item" onclick="escolherProduto(${p.id})"><span>${esc(p.display_name)}</span><span class="q${p.stock_qty <= 0 ? ' zero' : ''}">${p.stock_qty}</span></button>`).join('')
+        ? itens.map(p => `<button type="button" class="prod-item" onclick="escolherProduto(${p.id})"><span>${esc(p.display_name)}</span><span class="q${p.stock_qty <= 0 ? ' zero' : ''}">${fmtQtd(p.stock_qty)}</span></button>`).join('')
         : '<div class="prod-vazio">Nenhum produto encontrado</div>';
 }
 function escolherProduto(id) { fecharListaProdutos(); adicionarProduto(id); }
@@ -1296,6 +1375,8 @@ function mudarQtd(id, delta) {
 const bruto = l => l.qty * l.price;
 function pctDesc(l) {
     const v = Number(l.discVal) || 0;
+    const b = l.discBase;
+    if (b && l.discTipo === 'R$' && b.v === v && b.q === l.qty && b.p === l.price) return b.pct;
     if (l.discTipo === 'R$') return bruto(l) > 0 ? Math.min(100, Math.max(0, v / bruto(l) * 100)) : 0;
     return Math.min(100, Math.max(0, v));
 }
@@ -1312,7 +1393,7 @@ function atualizarLinha(l) {
 function mudarDesc(id, v) {
     const l = venda.linhas.find(x => x.id === id);
     if (!l) return;
-    l.discVal = parseFloat(String(v).replace(',', '.')) || 0;
+    l.discVal = parseBR(v);
     atualizarLinha(l);
 }
 function mudarTipoDesc(id, tipo) {
@@ -1345,7 +1426,7 @@ function renderLinhas() {
                 <div class="col">
                     <label>Qtd.</label>
                     <div class="stepper">
-                        <button onclick="mudarQtd(${l.id}, -1)"${trv}>−</button><span>${l.qty}</span><button onclick="mudarQtd(${l.id}, 1)"${trv}>+</button>
+                        <button onclick="mudarQtd(${l.id}, -1)"${trv}>−</button><span>${fmtQtd(l.qty)}</span><button onclick="mudarQtd(${l.id}, 1)"${trv}>+</button>
                     </div>
                 </div>
                 <div class="col">
@@ -1364,7 +1445,7 @@ function renderLinhas() {
                 <div class="sub" id="sub${l.id}"></div>
                 ${venda.travada ? '' : `<button class="rm" onclick="removerLinha(${l.id})" aria-label="Remover">×</button>`}
             </div>
-            ${(!venda.travada && l.qty > l.estoque) ? `<div class="warn-txt">Atenção: só há ${l.estoque} un em estoque.</div>` : ''}
+            ${(!venda.travada && l.qty > l.estoque) ? `<div class="warn-txt">Atenção: só há ${fmtQtd(l.estoque)} un em estoque.</div>` : ''}
         </div>`).join('');
     venda.linhas.forEach(atualizarLinha);
     atualizarTotal();
@@ -1372,6 +1453,7 @@ function renderLinhas() {
 
 function voltarParaVendas() {
     pilha = ['home', 'vendas'];
+    sincronizarHistorico();
     ir('vendas');
     $('venBusca').value = '';
     escolherStatus('last');
@@ -1417,6 +1499,8 @@ async function abrirEdicaoVendaInterno(id) {
 
     const faturaAtiva = (d.invoices || []).find(i => i.state !== 'cancel');
     const travada = (d.invoices || []).some(i => i.state !== 'cancel' && ['paid', 'in_payment', 'partial'].includes(i.payment_state));
+    const ativas = (d.invoices || []).filter(i => i.state !== 'cancel');
+    const quitada = ativas.length > 0 && ativas.every(i => ['paid', 'in_payment'].includes(i.payment_state));
     const vencAtual = (faturaAtiva && faturaAtiva.invoice_date_due) || o.validity_date || '';
     const dt = new Date(String(o.date_order || '').replace(' ', 'T') + 'Z');
     const p2 = n => String(n).padStart(2, '0');
@@ -1424,6 +1508,7 @@ async function abrirEdicaoVendaInterno(id) {
         editId: o.id,
         estado: o.state,
         travada,
+        quitada,
         nome: o.name,
         partner: { id: o.partner_id[0], name: o.partner_id[1] },
         warehouse: String(o.warehouse_id[0]),
@@ -1437,12 +1522,19 @@ async function abrirEdicaoVendaInterno(id) {
             price: l.price_unit, estoque: l.product_uom_qty,
             // o Odoo guarda %, mas aqui sempre mostramos em R$ (o mais usado); converte o % salvo para R$
             discTipo: 'R$',
-            discVal: l.discount ? Math.round(l.product_uom_qty * l.price_unit * l.discount) / 100 : 0
+            discVal: l.discount ? Math.round(l.product_uom_qty * l.price_unit * l.discount) / 100 : 0,
+            discBase: null
         })),
         invoiceId: faturaAtiva ? faturaAtiva.id : null,
         invoiceResidual: faturaAtiva ? (faturaAtiva.amount_residual > 0 ? faturaAtiva.amount_residual : faturaAtiva.amount_total) : 0,
         podePagar: !!faturaAtiva && !['paid', 'in_payment'].includes(faturaAtiva.payment_state)
     };
+    // % original gravado no Odoo: enquanto o desconto, a quantidade e o preço não mudarem, ele é reenviado igual
+    // (antes, converter para R$ e voltar a % fazia 10% virar 10,001% e o Odoo refazia fatura e entrega à toa)
+    venda.linhas.forEach((l, i) => {
+        const o = linhasOdoo[i];
+        l.discBase = { pct: Number(o.discount) || 0, v: l.discVal, q: l.qty, p: l.price };
+    });
     venda.dataOrig = venda.data;
     $('nvData').value = venda.data;
     $('nvVenc').value = venda.venc;
@@ -1527,6 +1619,7 @@ async function cancelarVendaAtual() {
     btn.disabled = false;
     btn.textContent = txt;
     if (d.success) {
+        prodCache = {};
         const avisos = (d.warnings || []).join(' ');
         const devolvido = d.credito_devolvido > 0 ? ' ' + brl(d.credito_devolvido) + ' voltou como crédito do cliente.' : '';
         toast('Venda cancelada.' + devolvido + (avisos ? ' ' + avisos : ''), avisos ? 'err' : 'ok');
@@ -1562,6 +1655,7 @@ async function salvarEdicaoVenda() {
     btn.disabled = false;
     btn.textContent = txt;
     if (d.success) {
+        prodCache = {};
         const avisos = (d.warnings || []).join(' ');
         toast('Venda atualizada!' + (avisos ? ' ' + avisos : ''), avisos ? 'err' : 'ok');
         // continua na venda: recarrega do Odoo para mostrar tudo atualizado (itens, total, fatura)
@@ -1579,7 +1673,7 @@ let pagCredDisp = 0;     // crédito disponível do cliente
 let pagLinhas = [];      // [{ conta, valor, auto }]  (auto: a última linha completa sozinha o restante)
 let diariosCache = null;
 
-const pgNum = v => parseFloat(String(v).replace(',', '.')) || 0;
+const pgNum = parseBR;
 const pgFmt = n => String(Math.round(n * 100) / 100).replace('.', ',');
 const pgOpcoes = sel => diariosCache.map(c => `<option value="${c.id}"${String(c.id) === String(sel) ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
 const pgCredUsar = () => $('payUsarCred').checked ? Math.round(pgNum($('payCredValor').value) * 100) / 100 : 0;
@@ -1669,6 +1763,8 @@ function pgMostrarCredito() {
 
 async function abrirPagamento(invoiceId, total) {
     pagFatura = invoiceId;
+    // contas e crédito do cliente em paralelo (antes eram uma consulta depois da outra)
+    const pCred = api('get_customer_credit', { invoice_id: invoiceId });
     if (!diariosCache) {
         const d = await api('get_payment_journals');
         diariosCache = d.result || [];
@@ -1681,7 +1777,7 @@ async function abrirPagamento(invoiceId, total) {
     pagLinhas = [{ conta, valor: pgFmt(pagTotal), auto: true }];
     // crédito que o cliente já tem (se a consulta falhar, segue sem crédito)
     pagCredDisp = 0;
-    try { const c = await api('get_customer_credit', { invoice_id: invoiceId }); pagCredDisp = Number(c.credit) || 0; } catch (e) {}
+    try { const c = await pCred; pagCredDisp = Number(c.credit) || 0; } catch (e) {}
     pgMostrarCredito();
     pgRender();
     $('payData').value = dataLocalAgora().slice(0, 10);
@@ -1731,16 +1827,14 @@ async function criarPagamento() {
     // ---- 2) formas de pagamento (contas) ----
     let feitos = 0, erro = null;
     if (pagaEmContas) {
-        for (let i = 0; i < pagLinhas.length; i++) {
-            const d = await api('register_payment', {
-                order_id: pagFatura,
-                journal_id: pagLinhas[i].conta,
-                amount: valores[i],
-                payment_date: $('payData').value
-            });
-            if (!d.success) { erro = d.error || 'Erro ao registrar o pagamento.'; break; }
-            feitos++;
-        }
+        // uma única chamada com todas as formas de pagamento (o servidor trava o pedido só no fim)
+        const d = await api('register_payments', {
+            order_id: pagFatura,
+            payment_date: $('payData').value,
+            payments: pagLinhas.map((l, i) => ({ journal_id: l.conta, amount: valores[i] }))
+        });
+        if (d.success) feitos = pagLinhas.length;
+        else { feitos = Number(d.registered) || 0; erro = d.error || 'Erro ao registrar o pagamento.'; }
     }
     fim();
 
@@ -1765,7 +1859,7 @@ async function criarPagamento() {
         pagLinhas = pagLinhas.slice(feitos);
         pagLinhas[pagLinhas.length - 1].auto = true;
         pgRender();
-        toast(feitos + ' pagamento(s) já registrado(s). ' + erro + ' Falta ' + brl(pagTotal) + '.', 'err');
+        toast(erro + ' Falta ' + brl(pagTotal) + '.', 'err');
     } else {
         pgRender();
         toast(erro + (usarCred > 0 ? ' O crédito já foi usado (' + brl(usarCred) + ').' : ''), 'err');
@@ -1806,11 +1900,19 @@ async function salvarVenda(lancar) {
         date_order: dataVendaISO(),
         invoice_date: dataLocalAgora().slice(0, 10),
         due_date: venda.venc || null,
+        client_key: venda.chave,
         confirm: lancar
     }); } finally { esconderCarregando(); btnA.disabled = btnB.disabled = false; btnA.textContent = txtA; btnB.textContent = txtB; }
 
     if (d.success) {
+        prodCache = {};     // o estoque mudou
         const avisos = (d.warnings || []).join(' ');
+        if (lancar && d.confirmed === false) {
+            // salvou, mas o Odoo não confirmou: NÃO diz "lançada" (o estoque não foi baixado)
+            toast('Venda salva como orçamento, mas NÃO foi confirmada. ' + avisos, 'err');
+            voltarParaVendas();
+            return;
+        }
         toast(lancar ? ('Venda lançada!' + (avisos ? ' ' + avisos : '')) : 'Rascunho salvo!', avisos ? 'err' : 'ok');
         // venda lançada: continua dentro dela (já em modo edição, com o botão Pagar), tudo atualizado
         if (lancar && d.id) {
@@ -1820,13 +1922,12 @@ async function salvarVenda(lancar) {
             voltarParaVendas();   // rascunho (orçamento) não é editável no app
         }
     } else {
-        toast(d.error || 'Erro ao salvar a venda.', 'err');
+        toast((d.error || 'Erro ao salvar a venda.') + ' Se tentar de novo, a venda não será duplicada.', 'err');
     }
 }
 
 /* ============ Sem zoom (o iOS ignora user-scalable=no, então bloqueia os gestos também) ============ */
 ['gesturestart', 'gesturechange', 'gestureend'].forEach(ev => document.addEventListener(ev, e => e.preventDefault()));
-document.addEventListener('touchmove', e => { if (e.touches && e.touches.length > 1) e.preventDefault(); }, { passive: false });
 
 /* ============ PWA: service worker + instalar app ============ */
 if ('serviceWorker' in navigator) {

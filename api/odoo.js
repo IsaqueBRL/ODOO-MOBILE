@@ -58,7 +58,9 @@ const execute = (model, method, args, kwargs = {}) =>
     rpc("object", "execute_kw", [ODOO_DB, cachedUid, ODOO_API_KEY, model, method, args, kwargs], READ_METHODS.has(method)).then(d => {
         if (d.error) {
             const errData = d.error.data || {};
-            const msg = errData.message || errData.debug || d.error.message || `Erro desconhecido do Odoo ao chamar ${model}.${method}`;
+            // Nunca devolve o "debug" (traceback com caminhos internos do servidor); só a mensagem legível
+            if (errData.debug) console.error(`Odoo ${model}.${method}:`, errData.debug);
+            const msg = errData.message || d.error.message || `Erro desconhecido do Odoo ao chamar ${model}.${method}`;
             throw new Error(msg);
         }
         return d.result;
@@ -75,6 +77,10 @@ function cached(key, ttlMs, fn) {
 }
 // Tela de Produtos: tipo "Mercadorias" (consu) + caixa "Vendas" marcada
 const PRODUCT_BASE_DOMAIN = [["type", "=", "consu"], ["sale_ok", "=", true]];
+// Data de "hoje" (AAAA-MM-DD) no fuso da loja, usada quando o app não manda a data. Padrão: Manaus (-4).
+const TZ_OFFSET_HORAS = Number.isFinite(Number(process.env.TZ_OFFSET_HORAS)) && process.env.TZ_OFFSET_HORAS !== undefined && process.env.TZ_OFFSET_HORAS !== ""
+    ? Number(process.env.TZ_OFFSET_HORAS) : -4;
+const hojeLocal = () => new Date(Date.now() + TZ_OFFSET_HORAS * 3600 * 1000).toISOString().slice(0, 10);
 const TTL_LONG = 10 * 60 * 1000;
 const TTL_PRODUCTS = 2 * 60 * 1000;
 const lookups = {
@@ -86,6 +92,28 @@ const lookups = {
     journals: () => cached("journals", TTL_LONG, () => execute("account.journal", "search_read", [[["type", "in", ["bank", "cash"]]]], { fields: ["id", "name", "type"] })),
     internalPickingTypes: () => cached("picking_types_internal", TTL_LONG, () => execute("stock.picking.type", "search_read", [[["code", "=", "internal"]]], { fields: ["id", "name", "default_location_src_id", "default_location_dest_id"] }))
 };
+
+// Saldo físico por produto num local (e sublocais internos). O Odoo soma no servidor (read_group),
+// em vez de trazer até 10 mil linhas de estoque; se o read_group falhar, usa a leitura direta.
+async function saldoPorProduto(locId) {
+    const dom = [["location_id", "child_of", Number(locId)], ["location_id.usage", "=", "internal"], ["quantity", ">", 0]];
+    const mapa = {};
+    try {
+        const grupos = await execute("stock.quant", "read_group", [dom], { fields: ["quantity:sum"], groupby: ["product_id"], lazy: false });
+        if (!Array.isArray(grupos)) throw new Error("read_group sem resultado");
+        grupos.forEach(g => {
+            if (Array.isArray(g.product_id)) mapa[g.product_id[0]] = Number(g.quantity) || 0;
+        });
+        return mapa;
+    } catch (e) {
+        const quants = await execute("stock.quant", "search_read", [dom], { fields: ["product_id", "quantity"] });
+        (quants || []).forEach(q => {
+            if (!Array.isArray(q.product_id)) return;
+            mapa[q.product_id[0]] = (mapa[q.product_id[0]] || 0) + q.quantity;
+        });
+        return mapa;
+    }
+}
 
 // Contas de caixa/banco (mesmo critério da tela Financeiro), incluindo as de saldo zero
 async function getCashBankAccounts() {
@@ -145,18 +173,16 @@ async function definirBloqueioEntregas(orderId, bloquear) {
 // Trava/destrava o PEDIDO DE VENDA (botões "Travar"/"Destravar" do Odoo)
 async function definirBloqueioPedido(orderId, bloquear) {
     const oid = Number(orderId);
-    const st = await execute("sale.order", "read", [[oid]], { fields: ["state"] });
-    if (!st || !st[0] || ["cancel", "draft", "sent"].includes(st[0].state)) return;
-
-    let atual;
+    let st;
     let usaCampo = true;
     try {
-        const r = await execute("sale.order", "read", [[oid]], { fields: ["locked"] });
-        atual = !!(r && r[0] && r[0].locked);
+        st = await execute("sale.order", "read", [[oid]], { fields: ["state", "locked"] });   // uma só leitura
     } catch (e) {
         usaCampo = false;               // Odoo mais antigo: pedido travado = estado "done"
-        atual = st[0].state === "done";
+        st = await execute("sale.order", "read", [[oid]], { fields: ["state"] });
     }
+    if (!st || !st[0] || ["cancel", "draft", "sent"].includes(st[0].state)) return;
+    const atual = usaCampo ? !!st[0].locked : st[0].state === "done";
     if (atual === !!bloquear) return;
 
     if (usaCampo) {
@@ -531,7 +557,12 @@ export default async function handler(req, res) {
         return res.status(500).json({ error: "Variáveis de ambiente ausentes na Vercel: " + missingEnv.join(", ") });
     }
 
-    const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
+    let body;
+    try {
+        body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
+    } catch (e) {
+        return res.status(400).json({ error: "Requisição inválida (JSON malformado)." });
+    }
     const action = body.action || "get_products";
 
     try {
@@ -555,7 +586,7 @@ export default async function handler(req, res) {
 
         // Força todas as linhas de produto de uma fatura a usarem sempre a mesma conta contábil,
         // sem que isso precise aparecer/ser escolhido na tela do nosso site
-        const FORCED_INVOICE_ACCOUNT_CODE = "3.01.01.01.01.04";
+        const FORCED_INVOICE_ACCOUNT_CODE = process.env.ODOO_FORCED_ACCOUNT_CODE || "3.01.01.01.01.04";
         const resolveForcedAccountId = async () => {
             if (forcedAccountIdCache) return forcedAccountIdCache;
             const accs = await execute("account.account", "search_read", [[["code", "=", FORCED_INVOICE_ACCOUNT_CODE]]], { fields: ["id"] });
@@ -875,11 +906,11 @@ export default async function handler(req, res) {
             return res.status(200).json({ success: true, applied: aplicado, residual: saldoFat });
         }
 
-        // AÇÃO: REGISTRAR PAGAMENTO DA FATURA (o que passar do saldo vira crédito do cliente)
-        if (action === "register_payment") {
-            const { order_id, journal_id, amount, payment_date } = body;
-            if (!order_id || !journal_id || !amount) {
-                return res.status(400).json({ error: "Campos obrigatórios não informados." });
+        // Registra UM pagamento numa fatura (o que passar do saldo vira crédito do cliente).
+        // Devolve { excess } se deu certo ou { status, error } se falhou. Não mexe no travamento do pedido.
+        const registrarUmPagamento = async (order_id, journal_id, amount, payment_date) => {
+            if (!order_id || !journal_id || !(Number(amount) > 0)) {
+                return { status: 400, error: "Campos obrigatórios não informados." };
             }
 
             // A fatura fica provisória até aqui: lança agora para poder registrar o pagamento
@@ -888,7 +919,7 @@ export default async function handler(req, res) {
                 try {
                     await execute("account.move", "action_post", [[Number(order_id)]]);
                 } catch (e) {
-                    return res.status(400).json({ error: "Não foi possível lançar a fatura para registrar o pagamento: " + e.message });
+                    return { status: 400, error: "Não foi possível lançar a fatura para registrar o pagamento: " + e.message };
                 }
             }
 
@@ -906,7 +937,7 @@ export default async function handler(req, res) {
                 }], {
                     context: { active_model: "account.move", active_ids: [Number(order_id)] }
                 });
-                if (!wizardId) return res.status(500).json({ error: "Não foi possível gerar o pagamento no Odoo." });
+                if (!wizardId) return { status: 500, error: "Não foi possível gerar o pagamento no Odoo." };
                 await execute("account.payment.register", "action_create_payments", [[wizardId]], {
                     context: { active_model: "account.move", active_ids: [Number(order_id)] }
                 });
@@ -914,7 +945,7 @@ export default async function handler(req, res) {
 
             // Passou do saldo: o excedente entra como pagamento do cliente sem fatura (= crédito para compras futuras)
             if (excedente > 0.004) {
-                if (!c || !c.payerId) return res.status(400).json({ error: "Não foi possível identificar o cliente para guardar o crédito." });
+                if (!c || !c.payerId) return { status: 400, error: "Não foi possível identificar o cliente para guardar o crédito." };
                 try {
                     const dados = {
                         payment_type: "inbound", partner_type: "customer", partner_id: c.payerId,
@@ -925,13 +956,44 @@ export default async function handler(req, res) {
                     const pid = await execute("account.payment", "create", [dados]);
                     await execute("account.payment", "action_post", [[pid]]);
                 } catch (e) {
-                    return res.status(500).json({ error: "A fatura foi paga, mas não foi possível guardar o crédito de " + excedente.toFixed(2).replace(".", ",") + ": " + e.message });
+                    return { status: 500, error: "A fatura foi paga, mas não foi possível guardar o crédito de " + excedente.toFixed(2).replace(".", ",") + ": " + e.message };
                 }
             }
+            return { excess: excedente };
+        };
 
-            // Fatura paga => tranca pedido e entrega
+        // AÇÃO: REGISTRAR PAGAMENTO DA FATURA
+        if (action === "register_payment") {
+            const { order_id, journal_id, amount, payment_date } = body;
+            const r = await registrarUmPagamento(order_id, journal_id, amount, payment_date);
+            // Fatura paga => tranca pedido e entrega (mesmo quando só o crédito falhou)
             try { await sincronizarBloqueioPorFatura(Number(order_id)); } catch (e) { /* melhor esforço */ }
-            return res.status(200).json({ success: true, excess: excedente });
+            if (r.error) return res.status(r.status).json({ error: r.error });
+            return res.status(200).json({ success: true, excess: r.excess });
+        }
+
+        // AÇÃO: REGISTRAR VÁRIOS PAGAMENTOS DE UMA VEZ (pagamento dividido em formas diferentes).
+        // Trava o pedido/entrega UMA vez no fim, em vez de uma vez por pagamento.
+        if (action === "register_payments") {
+            const { order_id, payments, payment_date } = body;
+            if (!order_id || !Array.isArray(payments) || payments.length === 0) {
+                return res.status(400).json({ error: "Informe ao menos um pagamento." });
+            }
+            let feitos = 0, excedente = 0, falha = null;
+            for (const p of payments) {
+                const r = await registrarUmPagamento(order_id, p.journal_id, p.amount, p.payment_date || payment_date);
+                if (r.error) { falha = r.error; break; }
+                feitos++;
+                excedente = r2(excedente + (r.excess || 0));
+            }
+            try { await sincronizarBloqueioPorFatura(Number(order_id)); } catch (e) { /* melhor esforço */ }
+            if (falha) {
+                return res.status(500).json({
+                    error: (feitos > 0 ? feitos + " de " + payments.length + " pagamento(s) foram registrados. " : "") + falha,
+                    registered: feitos
+                });
+            }
+            return res.status(200).json({ success: true, registered: feitos, excess: excedente });
         }
 
         // AÇÃO: BUSCAR CONTAS FINANCEIRAS E SALDO
@@ -1015,17 +1077,7 @@ export default async function handler(req, res) {
             const rootLoc = Array.isArray(wh.lot_stock_id) ? wh.lot_stock_id[0] : wh.view_location_id[0];
 
             // estoque físico do armazém (locais internos dele e sublocais), somado por produto
-            const quants = await execute("stock.quant", "search_read", [[
-                ["location_id", "child_of", rootLoc],
-                ["location_id.usage", "=", "internal"],
-                ["quantity", ">", 0]
-            ]], { fields: ["product_id", "quantity"], limit: 10000 });
-
-            const qtyByProduct = {};
-            (quants || []).forEach(q => {
-                if (!Array.isArray(q.product_id)) return;
-                qtyByProduct[q.product_id[0]] = (qtyByProduct[q.product_id[0]] || 0) + q.quantity;
-            });
+            const qtyByProduct = await saldoPorProduto(rootLoc);
             const ids = Object.keys(qtyByProduct).map(Number);
             if (ids.length === 0) return res.status(200).json({ products: [] });
 
@@ -1088,7 +1140,21 @@ export default async function handler(req, res) {
                 estavaBloqueado = !!(info && info[0] && info[0].state === "done");
             }
 
-            // Pagamentos e crédito usados nas faturas da venda voltam para o cliente como crédito
+            // 1º cancela o PEDIDO. Se o Odoo recusar, nada mais foi mexido (faturas e pagamentos continuam como estavam).
+            if (estavaBloqueado) {
+                await execute("sale.order", "action_unlock", [[oid]]);
+            }
+            try {
+                await execute("sale.order", "action_cancel", [[oid]], { context: ctx });
+            } catch (e) {
+                // se não deu para cancelar, devolve o pedido ao estado bloqueado em que estava
+                if (estavaBloqueado) {
+                    await execute("sale.order", "action_lock", [[oid]]).catch(() => {});
+                }
+                throw e;
+            }
+
+            // 2º pagamentos e crédito usados nas faturas da venda voltam para o cliente como crédito
             let creditoDevolvido = 0;
             const avisosCredito = [];
             try {
@@ -1113,20 +1179,6 @@ export default async function handler(req, res) {
                 }
             } catch (e) {
                 avisosCredito.push("Não foi possível devolver o crédito ao cliente: " + e.message);
-            }
-
-            if (estavaBloqueado) {
-                await execute("sale.order", "action_unlock", [[oid]]);
-            }
-
-            try {
-                await execute("sale.order", "action_cancel", [[oid]], { context: ctx });
-            } catch (e) {
-                // se não deu para cancelar, devolve o pedido ao estado bloqueado em que estava
-                if (estavaBloqueado) {
-                    await execute("sale.order", "action_lock", [[oid]]).catch(() => {});
-                }
-                throw e;
             }
 
             // Pedido cancelado: devolve ao estoque de origem o que já tinha sido entregue
@@ -1284,7 +1336,7 @@ export default async function handler(req, res) {
 
         // AÇÃO: CRIAR/ATUALIZAR PEDIDO DE VENDA (E, OPCIONALMENTE, CONFIRMAR + BAIXAR ESTOQUE + FATURAR)
         if (action === "save_sale_order") {
-            const { order_id, partner_id, warehouse_id, lines, confirm, removed_line_ids, date_order, invoice_date, due_date } = body;
+            const { order_id, partner_id, warehouse_id, lines, confirm, removed_line_ids, date_order, invoice_date, due_date, client_key } = body;
             // ISO (UTC) -> formato do Odoo "YYYY-MM-DD HH:MM:SS"
             let dateOrder = null;
             if (date_order) { const dt = new Date(date_order); if (!isNaN(dt)) dateOrder = dt.toISOString().slice(0, 19).replace("T", " "); }
@@ -1292,8 +1344,29 @@ export default async function handler(req, res) {
             if (!partner_id) return res.status(400).json({ error: "Selecione um cliente para o pedido." });
             const validLines = (lines || []).filter(l => l.product_id);
             if (validLines.length === 0) return res.status(400).json({ error: "Adicione ao menos um produto ao pedido." });
+            const linhaRuim = validLines.find(l => !(Number(l.qty) > 0) || !(Number(l.price) >= 0) || !Number.isFinite(Number(l.price)));
+            if (linhaRuim) return res.status(400).json({ error: "Confira as linhas: a quantidade deve ser maior que zero e o preço não pode ser negativo." });
+            validLines.forEach(l => { if (l.discount !== undefined) l.discount = Math.min(100, Math.max(0, Number(l.discount) || 0)); });
 
             let orderId = order_id ? Number(order_id) : null;
+
+            // Chave de "lançamento único": se a internet cair e o app repetir o envio, o pedido NÃO é duplicado.
+            const chave = (!orderId && typeof client_key === "string" && /^[\w-]{8,64}$/.test(client_key)) ? "app:" + client_key : null;
+            let jaExistia = false;
+            if (chave) {
+                const ex = await execute("sale.order", "search_read", [[["origin", "=", chave]]], { fields: ["id", "state", "invoice_ids"], limit: 1 });
+                if (ex && ex[0]) {
+                    orderId = ex[0].id;
+                    jaExistia = true;
+                    if (confirm && ["sale", "done"].includes(ex[0].state)) {
+                        // o envio anterior já chegou até o fim: devolve o mesmo resultado, sem refazer nada
+                        const fats = (ex[0].invoice_ids || []).length
+                            ? await execute("account.move", "search_read", [[["id", "in", ex[0].invoice_ids], ["state", "!=", "cancel"]]], { fields: ["id"], limit: 1 })
+                            : [];
+                        return res.status(200).json({ success: true, id: orderId, invoice_id: fats && fats[0] ? fats[0].id : null, invoice_posted: false, confirmed: true, warnings: [], repeated: true });
+                    }
+                }
+            }
 
             const headerData = {
                 partner_id: Number(partner_id),
@@ -1305,13 +1378,24 @@ export default async function handler(req, res) {
             if (warehouse_id) headerData.warehouse_id = Number(warehouse_id);
             if (dateOrder) headerData.date_order = dateOrder;
 
-            if (!orderId) {
+            if (jaExistia) {
+                // rascunho criado por um envio anterior que não terminou: aplica de novo o que está na tela
+                // (troca todas as linhas, para não duplicar nem manter itens antigos) e segue para a confirmação
+                headerData.order_line = [[5, 0, 0], ...validLines.map(l => [0, 0, {
+                    product_id: Number(l.product_id),
+                    product_uom_qty: Number(l.qty),
+                    price_unit: Number(l.price),
+                    discount: Number(l.discount) || 0
+                }])];
+                await execute("sale.order", "write", [[orderId], headerData]);
+            } else if (!orderId) {
                 headerData.order_line = validLines.map(l => [0, 0, {
                     product_id: Number(l.product_id),
                     product_uom_qty: Number(l.qty),
                     price_unit: Number(l.price),
                     discount: Number(l.discount) || 0
                 }]);
+                if (chave) headerData.origin = chave;
                 orderId = await execute("sale.order", "create", [headerData]);
             } else {
                 // Uma única escrita no pedido (remove + atualiza + cria linhas), como o próprio Odoo faz
@@ -1341,7 +1425,7 @@ export default async function handler(req, res) {
                 try {
                     await execute("sale.order", "action_confirm", [[orderId]]);
                 } catch (e) {
-                    return res.status(200).json({ success: true, id: orderId, warnings: ["Pedido salvo, mas não foi possível confirmá-lo: " + e.message] });
+                    return res.status(200).json({ success: true, id: orderId, confirmed: false, warnings: ["Pedido salvo, mas não foi possível confirmá-lo: " + e.message] });
                 }
 
                 // O Odoo regrava a data do pedido com "agora" ao confirmar; restaura a data escolhida
@@ -1392,7 +1476,7 @@ export default async function handler(req, res) {
                         await applyForcedAccountToInvoice(invoiceId);
 
                         // A data da fatura é sempre o dia da operação (hoje), independente da data da venda
-                        const hoje = /^\d{4}-\d{2}-\d{2}$/.test(String(invoice_date || "")) ? invoice_date : new Date(Date.now() - 4 * 3600 * 1000).toISOString().slice(0, 10);
+                        const hoje = /^\d{4}-\d{2}-\d{2}$/.test(String(invoice_date || "")) ? invoice_date : hojeLocal();
                         // A fatura fica PROVISÓRIA (editável) até o pagamento; ela é lançada na hora de pagar
                         try {
                             const dadosFatura = { invoice_date: hoje };
@@ -1409,7 +1493,7 @@ export default async function handler(req, res) {
                 }
             }
 
-            return res.status(200).json({ success: true, id: orderId, invoice_id: invoiceId, invoice_posted: invoicePosted, warnings });
+            return res.status(200).json({ success: true, id: orderId, invoice_id: invoiceId, invoice_posted: invoicePosted, confirmed: !!confirm, warnings });
         }
 
         // AÇÃO: ALTERAR UMA VENDA JÁ LANÇADA (mudar quantidade, adicionar e excluir produtos)
@@ -1456,7 +1540,8 @@ export default async function handler(req, res) {
                         vals.product_uom_qty = nova;
                         if (nova < qtdAtual[Number(l.id)]) reducoes.push({ lineId: Number(l.id), qty: nova });
                     }
-                    if (Math.abs((descAtual[Number(l.id)] || 0) - novoDesc) > 0.0001) vals.discount = novoDesc;
+                    // tolerância de 1 centésimo: evita "mudança" falsa por arredondamento (que refaria fatura e entrega à toa)
+                    if (Math.abs((descAtual[Number(l.id)] || 0) - novoDesc) > 0.01) vals.discount = novoDesc;
                     if (Object.keys(vals).length > 0) cmds.push([1, Number(l.id), vals]);
                 } else {
                     cmds.push([0, 0, {
@@ -1472,7 +1557,7 @@ export default async function handler(req, res) {
             let dateOrder = null;
             if (date_order) { const dt = new Date(date_order); if (!isNaN(dt)) dateOrder = dt.toISOString().slice(0, 19).replace("T", " "); }
             const venc = (typeof due_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(due_date)) ? due_date : null;
-            const hoje = /^\d{4}-\d{2}-\d{2}$/.test(String(invoice_date || "")) ? invoice_date : new Date(Date.now() - 4 * 3600 * 1000).toISOString().slice(0, 10);
+            const hoje = /^\d{4}-\d{2}-\d{2}$/.test(String(invoice_date || "")) ? invoice_date : hojeLocal();
 
             const atualVenc = await execute("sale.order", "read", [[oid]], { fields: ["validity_date"] });
             const vencMudou = (venc || false) !== ((atualVenc && atualVenc[0] && atualVenc[0].validity_date) || false);
@@ -1646,6 +1731,9 @@ export default async function handler(req, res) {
 
             // padrão do sistema: nome do cliente sempre em MAIÚSCULAS
             const nomeCliente = name.trim().toUpperCase();
+            // evita cliente duplicado (duplo toque, internet lenta): se já existe um com o mesmo nome, reaproveita
+            const jaTem = await execute("res.partner", "search_read", [[["name", "=ilike", nomeCliente]]], { fields: ["id", "name"], limit: 1 });
+            if (jaTem && jaTem[0]) return res.status(200).json({ success: true, id: jaTem[0].id, name: jaTem[0].name, existing: true });
             const newPartnerId = await execute("res.partner", "create", [{
                 name: nomeCliente,
                 email: email ? email.trim() : false,
@@ -1668,7 +1756,7 @@ export default async function handler(req, res) {
 
             const result = await execute("stock.quant", "search_read", [domain], {
                 fields: ["id", "location_id", "product_id", "quantity"],
-                limit: 100
+                limit: 300
             });
             return res.status(200).json({ result: result || [] });
         }
@@ -1680,12 +1768,7 @@ export default async function handler(req, res) {
             if (!locationId) return res.status(400).json({ error: "Local é obrigatório." });
             const query = String(body.query || "").trim();
 
-            const quants = await execute("stock.quant", "search_read", [[
-                ["location_id", "child_of", locationId],
-                ["location_id.usage", "=", "internal"],
-                ["quantity", ">", 0]
-            ]], { fields: ["product_id"], limit: 10000 });
-            const have = [...new Set((quants || []).filter(q => Array.isArray(q.product_id)).map(q => q.product_id[0]))];
+            const have = Object.keys(await saldoPorProduto(locationId)).map(Number);
 
             const domain = [...PRODUCT_BASE_DOMAIN];
             if (have.length) domain.push(["id", "not in", have]);
@@ -1775,41 +1858,70 @@ export default async function handler(req, res) {
             }
 
             const limiteTela = Math.min(Math.max(parseInt(body.limit, 10) || 100, 1), 1000);
-            const orders = await execute("sale.order", "search_read", [domain], {
-                fields: ["id", "name", "partner_id", "amount_total", "state", "invoice_status", "invoice_ids", "warehouse_id", "date_order"],
-                // mais recente primeiro (pela data da venda)
-                order: "date_order desc, id desc",
-                limit: filtroPagamento ? 1000 : limiteTela
-            });
+            const offsetTela = Math.max(parseInt(body.offset, 10) || 0, 0);
+            const camposPedido = ["id", "name", "partner_id", "amount_total", "state", "invoice_status", "invoice_ids", "warehouse_id", "date_order"];
 
-            // Busca em lote o status de pagamento das faturas ligadas a cada pedido
-            const allInvoiceIds = [];
-            (orders || []).forEach(o => (o.invoice_ids || []).forEach(id => allInvoiceIds.push(id)));
+            // Traz os pedidos de uma "página" já com o resumo de pagamento das faturas (uma consulta em lote)
+            const buscarPagina = async (limite, offset) => {
+                const orders = await execute("sale.order", "search_read", [domain], {
+                    fields: camposPedido,
+                    // mais recente primeiro (pela data da venda)
+                    order: "date_order desc, id desc",
+                    limit: limite,
+                    offset
+                });
+                const allInvoiceIds = [];
+                (orders || []).forEach(o => (o.invoice_ids || []).forEach(id => allInvoiceIds.push(id)));
+                const invoiceMap = {};
+                if (allInvoiceIds.length > 0) {
+                    const invoices = await execute("account.move", "search_read", [[["id", "in", allInvoiceIds]]], {
+                        fields: ["id", "payment_state", "state"]
+                    }).catch(() => []);
+                    (invoices || []).forEach(inv => { invoiceMap[inv.id] = inv; });
+                }
+                const lista = (orders || []).map(o => {
+                    // faturas canceladas (ex.: refeitas ao editar a venda) não contam
+                    const invs = (o.invoice_ids || []).map(id => invoiceMap[id]).filter(i => i && i.state !== 'cancel');
+                    let paymentSummary = "nao_faturado";
+                    if (invs.length > 0) {
+                        const quitada = i => i.payment_state === 'paid' || i.payment_state === 'in_payment';
+                        if (invs.every(quitada)) paymentSummary = "pago";
+                        else if (invs.some(i => quitada(i) || i.payment_state === 'partial')) paymentSummary = "parcial";
+                        else paymentSummary = "nao_pago";
+                    }
+                    return { ...o, payment_summary: paymentSummary };
+                });
+                return { lista, total: (orders || []).length };
+            };
 
-            let invoiceMap = {};
-            if (allInvoiceIds.length > 0) {
-                const invoices = await execute("account.move", "search_read", [[["id", "in", allInvoiceIds]]], {
-                    fields: ["id", "payment_state", "state"]
-                }).catch(() => []);
-                (invoices || []).forEach(inv => { invoiceMap[inv.id] = inv; });
+            let result;
+            let temMais = false;
+            if (!filtroPagamento) {
+                // pede 1 a mais só para saber se existe uma próxima página
+                const p = await buscarPagina(limiteTela + 1, offsetTela);
+                temMais = p.lista.length > limiteTela;
+                result = p.lista.slice(0, limiteTela);
+            } else {
+                // o filtro Pago/Não pago depende das faturas: lê em páginas pequenas até completar o que a tela pede
+                const tamanho = 100;
+                const filtra = o => filtroPagamento === 'paid' ? o.payment_summary === 'pago' : o.payment_summary !== 'pago';
+                result = [];
+                let off = 0, pulados = 0, esgotou = false;
+                for (let i = 0; i < 12 && result.length <= limiteTela && !esgotou; i++) {
+                    const p = await buscarPagina(tamanho, off);
+                    off += tamanho;
+                    if (p.total < tamanho) esgotou = true;
+                    for (const o of p.lista) {
+                        if (!filtra(o)) continue;
+                        if (pulados < offsetTela) { pulados++; continue; }
+                        result.push(o);
+                    }
+                }
+                temMais = result.length > limiteTela || !esgotou;
+                result = result.slice(0, limiteTela);
             }
 
-            let result = (orders || []).map(o => {
-                // faturas canceladas (ex.: refeitas ao editar a venda) não contam
-                const invs = (o.invoice_ids || []).map(id => invoiceMap[id]).filter(i => i && i.state !== 'cancel');
-                let paymentSummary = "nao_faturado";
-                if (invs.length > 0) {
-                    const allPaid = invs.every(i => i.payment_state === 'paid' || i.payment_state === 'in_payment');
-                    paymentSummary = allPaid ? "pago" : "nao_pago";
-                }
-                return { ...o, payment_summary: paymentSummary };
-            });
-
-            if (filtroPagamento === 'paid') result = result.filter(o => o.payment_summary === 'pago');
-            if (filtroPagamento === 'sale') result = result.filter(o => o.payment_summary !== 'pago');
-            result = result.slice(0, limiteTela);
-
-            return res.status(200).json({ result });
+            return res.status(200).json({ result, has_more: temMais });
         }
 
         // AÇÃO: RESUMO DO DIA (valor vendido e quantidade de vendas confirmadas no intervalo, do local informado)
@@ -1822,7 +1934,19 @@ export default async function handler(req, res) {
             if (!de || !ate) return res.status(400).json({ error: "Período inválido." });
             const domain = [["state", "in", ["sale", "done"]], ["date_order", ">=", de], ["date_order", "<", ate]];
             if (body.warehouse_id) domain.push(["warehouse_id", "=", parseInt(body.warehouse_id, 10)]);
-            const pedidos = await execute("sale.order", "search_read", [domain], { fields: ["amount_total"], limit: 2000 });
+            // O próprio Odoo soma o valor (sem trazer os pedidos um a um); se o read_group falhar, soma aqui
+            try {
+                const [grupos, count] = await Promise.all([
+                    execute("sale.order", "read_group", [domain], { fields: ["amount_total:sum"], groupby: [], lazy: false }),
+                    execute("sale.order", "search_count", [domain])
+                ]);
+                const g = Array.isArray(grupos) ? grupos[0] : null;
+                if (g && typeof g.amount_total === "number") {
+                    return res.status(200).json({ total: Math.round(g.amount_total * 100) / 100, count });
+                }
+                if (count === 0) return res.status(200).json({ total: 0, count: 0 });
+            } catch (e) { /* cai no cálculo manual abaixo */ }
+            const pedidos = await execute("sale.order", "search_read", [domain], { fields: ["amount_total"] });
             const total = (pedidos || []).reduce((s, o) => s + (Number(o.amount_total) || 0), 0);
             return res.status(200).json({ total: Math.round(total * 100) / 100, count: (pedidos || []).length });
         }
@@ -1871,17 +1995,7 @@ export default async function handler(req, res) {
             if (!locId) return res.status(400).json({ error: "Local de origem é obrigatório." });
 
             // estoque físico do local escolhido (e sublocais), somado por produto
-            const quants = await execute("stock.quant", "search_read", [[
-                ["location_id", "child_of", locId],
-                ["location_id.usage", "=", "internal"],
-                ["quantity", ">", 0]
-            ]], { fields: ["product_id", "quantity"], limit: 10000 });
-
-            const qtyByProduct = {};
-            (quants || []).forEach(q => {
-                if (!Array.isArray(q.product_id)) return;
-                qtyByProduct[q.product_id[0]] = (qtyByProduct[q.product_id[0]] || 0) + q.quantity;
-            });
+            const qtyByProduct = await saldoPorProduto(locId);
             const ids = Object.keys(qtyByProduct).map(Number);
             if (ids.length === 0) return res.status(200).json({ products: [] });
 
@@ -2058,7 +2172,7 @@ export default async function handler(req, res) {
                 ["location_id", "child_of", srcId],
                 ["location_id.usage", "=", "internal"],
                 ["product_id", "in", items.map(l => l.product_id)]
-            ]], { fields: ["product_id", "quantity"], limit: 10000 });
+            ]], { fields: ["product_id", "quantity"] });
             const saldo = {};
             (quants || []).forEach(q => { if (Array.isArray(q.product_id)) saldo[q.product_id[0]] = (saldo[q.product_id[0]] || 0) + q.quantity; });
             for (const l of items) {
@@ -2099,7 +2213,15 @@ export default async function handler(req, res) {
                 }
                 await execute("stock.picking", "button_validate", [[pickingId]], { context: { skip_immediate: true, skip_backorder: true, skip_sms: true } });
             } catch (e) {
-                return res.status(500).json({ error: "A transferência #" + pickingId + " foi criada, mas não pôde ser concluída: " + e.message });
+                // não deixa transferência pela metade no Odoo: cancela o rascunho/pendente criado agora
+                let limpou = false;
+                try {
+                    await execute("stock.picking", "action_cancel", [[pickingId]]);
+                    limpou = true;
+                } catch (e2) { /* se não deu para cancelar, avisa abaixo */ }
+                return res.status(500).json({ error: limpou
+                    ? "Não foi possível concluir a transferência: " + e.message + " Nada foi movido; pode tentar de novo."
+                    : "A transferência #" + pickingId + " foi criada, mas não pôde ser concluída: " + e.message + " Confira ou cancele-a no Odoo." });
             }
 
             const p = await execute("stock.picking", "read", [[pickingId]], { fields: ["state", "name"] });
