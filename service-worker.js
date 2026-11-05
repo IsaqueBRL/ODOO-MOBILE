@@ -1,11 +1,11 @@
 // Service Worker do app "Deuris Candy 2 - Mobile"
 // Objetivo: permitir que o navegador ofereça "Instalar app" e evitar tela branca sem internet.
-// Guarda só o "shell" (HTML, manifest e ícones). Os dados (estoque, vendas, clientes)
+// Guarda só o "shell" (HTML, CSS, JS, manifest e ícones). Os dados (estoque, vendas, clientes)
 // vêm sempre da API /api/odoo em tempo real, então o app precisa de internet para funcionar de verdade.
 
-const CACHE_NAME = "deuris-mobile-v2";
+const CACHE_NAME = "deuris-mobile-v3";
 const TEMPO_REDE_MS = 3000;   // rede lenta: depois disso usa a cópia guardada, em vez de deixar o app travado
-const SHELL = ["/", "/index.html", "/manifest.json", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png"];
+const SHELL = ["/", "/index.html", "/style.css", "/app.js", "/manifest.json", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
