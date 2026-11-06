@@ -1944,11 +1944,16 @@ export default async function handler(req, res) {
             const raiz = wh ? ((Array.isArray(wh.view_location_id) && wh.view_location_id[0]) || (Array.isArray(wh.lot_stock_id) && wh.lot_stock_id[0])) : null;
             if (!raiz) return res.status(404).json({ error: "Local não encontrado." });
 
-            const picks = await execute("stock.picking", "search_read", [[
+            // Paginado (o app pede 3 por vez e o botão "Ver mais" pede as próximas): pede 1 a mais só para saber se há mais
+            const limite = Math.min(Math.max(parseInt(body.limit, 10) || 3, 1), 50);
+            const offset = Math.max(parseInt(body.offset, 10) || 0, 0);
+            const lidas = await execute("stock.picking", "search_read", [[
                 ["picking_type_id.code", "=", "internal"],
                 ["state", "=", "done"],
                 "|", ["location_id", "child_of", raiz], ["location_dest_id", "child_of", raiz]
-            ]], { fields: ["id", "name", "date_done", "location_id", "location_dest_id"], order: "date_done desc, id desc", limit: Math.min(parseInt(body.limit, 10) || 30, 100) });
+            ]], { fields: ["id", "name", "date_done", "location_id", "location_dest_id"], order: "date_done desc, id desc", limit: limite + 1, offset });
+            const temMais = (lidas || []).length > limite;
+            const picks = (lidas || []).slice(0, limite);
 
             let moves = [];
             if (picks && picks.length > 0) {
@@ -1965,7 +1970,7 @@ export default async function handler(req, res) {
                 lines: (moves || []).filter(m => Array.isArray(m.picking_id) && m.picking_id[0] === p.id)
                     .map(m => ({ name: Array.isArray(m.product_id) ? m.product_id[1] : "-", qty: m.product_uom_qty }))
             }));
-            return res.status(200).json({ result });
+            return res.status(200).json({ result, has_more: temMais });
         }
 
         // AÇÃO: TRANSFERÊNCIA RÁPIDA (app mobile): cria, confirma e valida a transferência interna de uma vez

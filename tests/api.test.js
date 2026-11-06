@@ -335,3 +335,32 @@ test("quick_transfer: produto que não é Mercadorias/Vendas é recusado e nada 
     assert.match(r.json.error, /Mercadorias/);
     assert.equal(feitas("stock.picking", "create").length, 0);
 });
+
+test("histórico de transferências: pagina de 3 em 3 e avisa se há mais", async () => {
+    instalarOdoo();
+    respostas["stock.warehouse.search_read"] = [{ id: 1, name: "CASA", lot_stock_id: [20, "CASA/Estoque"], view_location_id: [19, "CASA"] }];
+    const todas = [5, 4, 3, 2].map(n => ({ id: n, name: "CASA/INT/" + n, date_done: "2026-11-0" + n + " 10:00:00", location_id: [20, "CASA/Estoque"], location_dest_id: [30, "SHOP/Estoque"] }));
+    respostas["stock.picking.search_read"] = (args, kw) => todas.slice(kw.offset || 0, (kw.offset || 0) + kw.limit);
+    respostas["stock.move.search_read"] = (args) => args[0][0][2].map(id => ({ picking_id: [id, "x"], product_id: [1, "BALA"], product_uom_qty: 1 }));
+
+    const p1 = await chamar({ action: "get_transfer_history", warehouse_id: 1, limit: 3 });
+    assert.equal(p1.json.result.length, 3);
+    assert.equal(p1.json.has_more, true);
+    assert.equal(feitas("stock.picking", "search_read")[0].kwargs.limit, 4);      // pede 1 a mais
+    assert.equal(feitas("stock.move", "search_read").length, 1);                  // linhas de uma vez só
+
+    const p2 = await chamar({ action: "get_transfer_history", warehouse_id: 1, limit: 3, offset: 3 });
+    assert.equal(p2.json.result.length, 1);
+    assert.equal(p2.json.has_more, false);
+    assert.deepEqual(p2.json.result.map(t => t.id), [2]);
+});
+
+test("histórico de transferências: sem 'limit' o padrão é 3", async () => {
+    instalarOdoo();
+    respostas["stock.warehouse.search_read"] = [{ id: 1, name: "CASA", lot_stock_id: [20, "x"], view_location_id: [19, "y"] }];
+    respostas["stock.picking.search_read"] = [];
+    const r = await chamar({ action: "get_transfer_history", warehouse_id: 1 });
+    assert.equal(r.status, 200);
+    assert.equal(r.json.has_more, false);
+    assert.equal(feitas("stock.picking", "search_read")[0].kwargs.limit, 4);
+});

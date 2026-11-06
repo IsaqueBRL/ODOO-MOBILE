@@ -505,18 +505,36 @@ function travarLocaisIguais() {
 // "CASA/Stock" -> "CASA" (só o nome do local, sem a pasta de estoque)
 const nomeLocalCurto = n => String(n || '-').split('/')[0].trim() || '-';
 
-async function carregarHistoricoTransf() {
+// Histórico: mostra 3 por vez; "Ver mais" busca as próximas 3 (poupa a API)
+const TR_HIST_PAGINA = 3;
+let trHistAcum = [], trHistReq = 0;
+
+async function carregarHistoricoTransf(mais) {
     const box = $('trHist');
     if (!meuLocal || !meuLocal.wh) { box.innerHTML = ''; return; }
-    const d = await api('get_transfer_history', { warehouse_id: meuLocal.wh.id });
-    if (!d.result) { box.innerHTML = `<div class="status">${esc(d.error || 'Erro ao carregar o histórico.')}</div>`; return; }
-    if (d.result.length === 0) { box.innerHTML = '<div class="status">Nenhuma transferência neste local.</div>'; return; }
-    box.innerHTML = d.result.map(t => `
+    const req = ++trHistReq;
+    if (!mais) trHistAcum = [];
+    const btn = $('trHistMais');
+    if (mais && btn) { btn.disabled = true; btn.textContent = 'Carregando...'; }
+    const d = await api('get_transfer_history', { warehouse_id: meuLocal.wh.id, limit: TR_HIST_PAGINA, offset: trHistAcum.length });
+    if (req !== trHistReq) return;
+    if (!d.result) {
+        if (mais) {
+            const b = $('trHistMais'); if (b) { b.disabled = false; b.textContent = 'Ver mais'; }
+            toast(d.error || 'Erro ao carregar o histórico.', 'err');
+        } else box.innerHTML = `<div class="status">${esc(d.error || 'Erro ao carregar o histórico.')}</div>`;
+        return;
+    }
+    // sem repetir: se entrou uma transferência nova enquanto a lista estava aberta, a paginação desloca
+    const jaTem = new Set(trHistAcum.map(t => t.id));
+    trHistAcum = trHistAcum.concat(d.result.filter(t => !jaTem.has(t.id)));
+    if (trHistAcum.length === 0) { box.innerHTML = '<div class="status">Nenhuma transferência neste local.</div>'; return; }
+    box.innerHTML = trHistAcum.map(t => `
         <div class="th-item">
             <div class="th-top"><b>${esc(t.name)}</b><span>${dataCurta(t.date_done)}</span></div>
             ${t.lines.map(l => `<div class="th-prod"><span>${esc(l.name)}</span><span>${fmtQtd(l.qty)} un.</span></div>`).join('')}
             <div class="th-rota">${esc(nomeLocalCurto(t.origin))} &gt; ${esc(nomeLocalCurto(t.dest))}</div>
-        </div>`).join('');
+        </div>`).join('') + (d.has_more ? '<button type="button" class="btn sec" id="trHistMais" onclick="carregarHistoricoTransf(true)">Ver mais</button>' : '');
 }
 
 function mudarOrigemTransf() {
