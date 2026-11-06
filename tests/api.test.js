@@ -292,6 +292,7 @@ test("quick_transfer: valida com o helper e responde com o nome da transferênci
     instalarOdoo();
     respostas["stock.quant.search_read"] = [{ product_id: [5, "BALA"], quantity: 10 }];
     respostas["stock.picking.type.search_read"] = [{ id: 2, name: "Interna", default_location_src_id: [20, "x"], default_location_dest_id: [21, "y"] }];
+    respostas["product.product.search_read"] = [{ id: 5, display_name: "BALA" }];
     respostas["stock.picking.create"] = 70;
     respostas["stock.move.search_read"] = [{ id: 1, product_uom_qty: 2, quantity: 2 }];
     respostas["stock.picking.read"] = [{ state: "done", name: "WH/INT/7" }];
@@ -305,9 +306,32 @@ test("quick_transfer: se não concluir, avisa e não diz que deu certo", async (
     instalarOdoo();
     respostas["stock.quant.search_read"] = [{ product_id: [5, "BALA"], quantity: 10 }];
     respostas["stock.picking.type.search_read"] = [{ id: 2, name: "Interna", default_location_src_id: [20, "x"], default_location_dest_id: [21, "y"] }];
+    respostas["product.product.search_read"] = [{ id: 5, display_name: "BALA" }];
     respostas["stock.picking.create"] = 71;
     respostas["stock.picking.read"] = [{ state: "assigned", name: "WH/INT/8" }];
     const r = await chamar({ action: "quick_transfer", location_id: 20, location_dest_id: 21, lines: [{ product_id: 5, qty: 2 }] });
     assert.equal(r.status, 500);
     assert.match(r.json.error, /não foi concluída/);
+});
+
+test("transferência: a lista de produtos do local traz só Mercadorias com Vendas marcado", async () => {
+    instalarOdoo();
+    respostas["stock.quant.read_group"] = [{ product_id: [5, "BALA"], quantity: 4 }];
+    respostas["product.product.search_read"] = [{ id: 5, display_name: "BALA", uom_id: [1, "Un"] }];
+    const r = await chamar({ action: "get_location_products", location_id: 20 });
+    assert.equal(r.status, 200);
+    const dominio = JSON.stringify(feitas("product.product", "search_read")[0].args[0]);
+    assert.ok(dominio.includes('["type","=","consu"]'), dominio);
+    assert.ok(dominio.includes('["sale_ok","=",true]'), dominio);
+    assert.ok(!dominio.includes('"service"'), dominio);
+});
+
+test("quick_transfer: produto que não é Mercadorias/Vendas é recusado e nada é criado", async () => {
+    instalarOdoo();
+    respostas["stock.quant.search_read"] = [{ product_id: [9, "INSUMO"], quantity: 10 }];
+    respostas["product.product.search_read"] = [];       // o Odoo não devolve: não passa no filtro
+    const r = await chamar({ action: "quick_transfer", location_id: 20, location_dest_id: 21, lines: [{ product_id: 9, qty: 1 }] });
+    assert.equal(r.status, 400);
+    assert.match(r.json.error, /Mercadorias/);
+    assert.equal(feitas("stock.picking", "create").length, 0);
 });

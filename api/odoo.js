@@ -1924,8 +1924,9 @@ export default async function handler(req, res) {
             const ids = Object.keys(qtyByProduct).map(Number);
             if (ids.length === 0) return res.status(200).json({ products: [] });
 
+            // só produtos "Mercadorias" com "Vendas" marcado (mesmo critério das telas de Estoque e Produtos)
             // sem ordenar por display_name aqui (campo calculado, o Odoo rejeita); a ordem é feita no servidor
-            const products = await execute("product.product", "search_read", [[["id", "in", ids], ["type", "!=", "service"]]], {
+            const products = await execute("product.product", "search_read", [[["id", "in", ids], ...PRODUCT_BASE_DOMAIN]], {
                 fields: ["id", "display_name", "uom_id"]
             });
             const list = (products || [])
@@ -1991,6 +1992,12 @@ export default async function handler(req, res) {
                     return res.status(400).json({ error: "Quantidade maior que o estoque disponível na origem (disponível: " + (saldo[l.product_id] || 0) + ")." });
                 }
             }
+
+            // só Mercadorias com "Vendas" marcado podem ser transferidas por aqui
+            const validos = await execute("product.product", "search_read", [[["id", "in", items.map(l => l.product_id)], ...PRODUCT_BASE_DOMAIN]], { fields: ["id", "display_name"] });
+            const idsValidos = new Set((validos || []).map(p => p.id));
+            const invalidos = items.filter(l => !idsValidos.has(l.product_id));
+            if (invalidos.length > 0) return res.status(400).json({ error: "Só produtos do tipo Mercadorias com \"Vendas\" marcado podem ser transferidos. Atualize a lista e tente de novo." });
 
             const type = await resolveInternalPickingType(srcId);
             if (!type) return res.status(400).json({ error: "Nenhum tipo de operação de Transferência Interna encontrado no Odoo." });
